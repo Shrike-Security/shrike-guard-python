@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "shrike-guard"
-version = "1.0.0"
+version = "1.1.0"
 description = "Shrike Security SDK - Protect your LLM applications (OpenAI, Claude, Gemini) from prompt injection, PII leakage, and jailbreaks"
 authors = ["Shrike Security <security@shrike.com>"]
 readme = "README.md"

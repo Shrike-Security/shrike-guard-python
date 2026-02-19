@@ -26,8 +26,8 @@ DEFAULT_FAIL_MODE: Final[FailMode] = FailMode.OPEN
 # Default uses load balancer for scalability. Override with endpoint param for VPC deployments.
 DEFAULT_ENDPOINT: Final[str] = "https://api.shrikesecurity.com/agent"
 
-# Note: All scanning is done via backend API (tier-based: free=L1-L4, paid=L1-L8)
-# No local patterns needed - backend handles all detection logic
+# Note: All scanning is done via backend API. All tiers get full 9-layer cascade (L1-L8).
+# Enterprise tier includes priority processing, higher rate limits, and custom policies.
 
 # SDK identification
 SDK_NAME: Final[str] = "python"

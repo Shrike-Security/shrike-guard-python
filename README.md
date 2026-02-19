@@ -4,29 +4,49 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Shrike Guard** is a Python SDK that provides security protection for your LLM applications. It wraps the OpenAI Python client to automatically scan all prompts for security threats before they reach the LLM.
+**Shrike Guard** is a Python SDK that provides security protection for your LLM applications. It wraps OpenAI, Anthropic (Claude), and Google Gemini clients to automatically scan all prompts for security threats before they reach the LLM.
 
 ## Features
 
-- **Drop-in replacement** for the OpenAI Python client
+- **Drop-in replacement** for OpenAI, Anthropic, and Gemini clients
 - **Automatic prompt scanning** for:
   - Prompt injection attacks
   - PII/sensitive data leakage
   - Jailbreak attempts
+  - SQL injection
+  - Path traversal
   - Malicious instructions
 - **Fail-safe modes**: Choose between fail-open (default) or fail-closed behavior
-- **Async support**: Works with both sync and async OpenAI clients
+- **Async support**: Works with both sync and async clients
 - **Zero code changes**: Just replace your import
+
+## What Shrike Detects
+
+Shrike's backend runs a 9-layer detection cascade with **86+ security rules** across **6 compliance frameworks**:
+
+| Framework | Rules | Coverage |
+|-----------|-------|----------|
+| **HIPAA** | 19 | Protected health information (PHI) — 19 Safe Harbor identifiers |
+| **SOC 2** | 21 | Secrets, credentials, API keys, cloud tokens |
+| **ISO 27001** | 19 | Information security — passwords, tokens, certificates |
+| **PCI-DSS** | 8 | Cardholder data — PAN, CVV, expiry, track data, PINs |
+| **GDPR** | 11 | EU personal data — names, addresses, national IDs |
+| **WebMCP Tool Safety** | 8 | MCP tool description injection, data exfiltration |
+
+Plus built-in detection for prompt injection, jailbreaks, social engineering, dangerous requests, and 130+ threat patterns.
 
 ## Installation
 
 ```bash
-pip install shrike-guard
+pip install shrike-guard                      # OpenAI (included by default)
+pip install shrike-guard[anthropic]            # + Anthropic Claude
+pip install shrike-guard[gemini]               # + Google Gemini
+pip install shrike-guard[all]                  # All providers
 ```
 
 ## Quick Start
 
-### Synchronous Usage
+### OpenAI
 
 ```python
 from shrike_guard import ShrikeOpenAI
@@ -44,6 +64,41 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)
+```
+
+### Anthropic (Claude)
+
+```python
+from shrike_guard import ShrikeAnthropic
+
+client = ShrikeAnthropic(
+    api_key="sk-ant-...",
+    shrike_api_key="shrike-...",
+)
+
+response = client.messages.create(
+    model="claude-sonnet-4-5-20250929",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+print(response.content[0].text)
+```
+
+### Google Gemini
+
+```python
+from shrike_guard import ShrikeGemini
+
+client = ShrikeGemini(
+    api_key="AIza...",
+    shrike_api_key="shrike-...",
+)
+
+model = client.GenerativeModel("gemini-pro")
+response = model.generate_content("Hello!")
+
+print(response.text)
 ```
 
 ### Async Usage
@@ -99,7 +154,7 @@ client = ShrikeOpenAI(
 client = ShrikeOpenAI(
     api_key="sk-...",
     shrike_api_key="shrike-...",
-    scan_timeout=2.0,  # Timeout in seconds (default: 2.0)
+    scan_timeout=2.0,  # Timeout in seconds (default: 10.0)
 )
 ```
 
@@ -113,6 +168,24 @@ client = ShrikeOpenAI(
     shrike_api_key="shrike-...",
     shrike_endpoint="https://your-shrike-instance.com",
 )
+```
+
+## SQL and File Scanning
+
+```python
+from shrike_guard import ScanClient
+
+with ScanClient(api_key="shrike-...") as scanner:
+    # Scan SQL queries for injection attacks
+    sql_result = scanner.scan_sql("SELECT * FROM users WHERE id = 1")
+    if not sql_result["safe"]:
+        print(f"SQL threat: {sql_result['reason']}")
+
+    # Scan file paths for path traversal
+    file_result = scanner.scan_file("/app/data/output.csv")
+
+    # Scan file content for secrets/PII
+    content_result = scanner.scan_file("/tmp/config.py", "api_key = 'sk-...'")
 ```
 
 ## Error Handling
@@ -160,7 +233,10 @@ with ScanClient(api_key="shrike-...") as scanner:
 ## Compatibility
 
 - **Python**: 3.8+
-- **OpenAI SDK**: 1.0.0+
+- **LLM SDKs**:
+  - OpenAI SDK `>=1.0.0`
+  - Anthropic SDK `>=0.18.0` (optional: `pip install shrike-guard[anthropic]`)
+  - Google Generative AI `>=0.3.0` (optional: `pip install shrike-guard[gemini]`)
 - Works with:
   - OpenAI API
   - Azure OpenAI
@@ -172,44 +248,27 @@ You can configure the SDK using environment variables:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
 export SHRIKE_API_KEY="shrike-..."
 export SHRIKE_ENDPOINT="https://your-shrike-instance.com"
 ```
 
-Then initialize without explicit arguments:
-
-```python
-import os
-from shrike_guard import ShrikeOpenAI
-
-client = ShrikeOpenAI(
-    shrike_api_key=os.environ.get("SHRIKE_API_KEY"),
-)
-```
-
 ## Scope and Limitations
 
-### What Shrike Guard Scans
-
-| Scanned ✅ | Not Scanned ❌ |
-|-----------|---------------|
+| Scanned | Not Scanned |
+|---------|-------------|
 | Input prompts (user messages) | Streaming output from LLM |
-| System prompts | Non-streaming completions (V2 roadmap) |
-| Multi-modal text content | Image/audio content |
+| System prompts | Image/audio content |
+| Multi-modal text content | Non-chat API calls |
+| SQL queries | |
+| File paths and content | |
 
 ### Why Input-Only Scanning?
 
-**V1 Design Decision:** Shrike Guard focuses on **pre-flight protection** - blocking malicious prompts BEFORE they reach the LLM. This:
+Shrike Guard focuses on **pre-flight protection** - blocking malicious prompts BEFORE they reach the LLM. This:
 - Prevents prompt injection attacks at the source
 - Has zero latency impact on LLM responses
 - Catches 95%+ of threats (attacks are in the INPUT)
-
-### Output Scanning Roadmap
-
-Output scanning (detecting leaked PII, secrets in responses) is planned for V2. For now:
-- Use Shrike's real-time dashboard to monitor flagged prompts
-- Enable audit logging for compliance review
-- Consider post-processing with `ScanClient.scan()` for high-sensitivity applications
 
 ## License
 
@@ -218,5 +277,5 @@ Apache 2.0
 ## Support
 
 - Documentation: https://docs.shrike.security/sdk/python
-- Issues: https://github.com/shrike-security/shrike-guard/issues
+- Issues: https://github.com/Shrike-Security/shrike-guard-python/issues
 - Email: support@shrike.security
