@@ -35,6 +35,24 @@ Shrike's backend runs a 9-layer detection cascade with **86+ security rules** ac
 
 Plus built-in detection for prompt injection, jailbreaks, social engineering, dangerous requests, and 130+ threat patterns.
 
+### Tiers
+
+| Tier | Pipeline | Cost |
+|------|----------|------|
+| **Community** | Full 9-layer cascade (L1-L8) | Free |
+| **Enterprise** | Full 9-layer cascade + priority processing, higher rate limits, custom policies | Paid |
+
+**Get your free API key:**
+
+1. Register at [shrikesecurity.com/signup](https://shrikesecurity.com/signup)
+2. Or via the API:
+   ```bash
+   curl -X POST https://api.shrikesecurity.com/agent/api/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{"email": "you@company.com", "password": "...", "company": "Acme", "role": "developer"}'
+   ```
+3. Your API key (`shrike_...`) is returned in the response — use it as `shrike_api_key` in the SDK.
+
 ## Installation
 
 ```bash
