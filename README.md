@@ -22,36 +22,27 @@
 
 ## What Shrike Detects
 
-Shrike's backend runs a 9-layer detection cascade with **86+ security rules** across **6 compliance frameworks**:
+Shrike's backend runs a multi-stage detection pipeline with security rules across **6 compliance frameworks**:
 
-| Framework | Rules | Coverage |
-|-----------|-------|----------|
-| **HIPAA** | 19 | Protected health information (PHI) — 19 Safe Harbor identifiers |
-| **SOC 2** | 21 | Secrets, credentials, API keys, cloud tokens |
-| **ISO 27001** | 19 | Information security — passwords, tokens, certificates |
-| **PCI-DSS** | 8 | Cardholder data — PAN, CVV, expiry, track data, PINs |
-| **GDPR** | 11 | EU personal data — names, addresses, national IDs |
-| **WebMCP Tool Safety** | 8 | MCP tool description injection, data exfiltration |
+| Framework | Coverage |
+|-----------|----------|
+| **HIPAA** | Protected health information (PHI) |
+| **SOC 2** | Secrets, credentials, API keys, cloud tokens |
+| **ISO 27001** | Information security — passwords, tokens, certificates |
+| **PCI-DSS** | Cardholder data — PAN, CVV, expiry, track data |
+| **GDPR** | EU personal data — names, addresses, national IDs |
+| **WebMCP Tool Safety** | MCP tool description injection, data exfiltration |
 
-Plus built-in detection for prompt injection, jailbreaks, social engineering, dangerous requests, and 130+ threat patterns.
+Plus built-in detection for prompt injection, jailbreaks, social engineering, and dangerous requests.
 
 ### Tiers
 
 | Tier | Pipeline | Cost |
 |------|----------|------|
-| **Community** | Full 9-layer cascade (L1-L8) | Free |
-| **Enterprise** | Full 9-layer cascade + priority processing, higher rate limits, custom policies | Paid |
+| **Community** | Full detection pipeline | Free |
+| **Enterprise** | Full pipeline + priority processing, higher rate limits, custom policies | Paid |
 
-**Get your free API key:**
-
-1. Register at [shrikesecurity.com/signup](https://shrikesecurity.com/signup)
-2. Or via the API:
-   ```bash
-   curl -X POST https://api.shrikesecurity.com/agent/api/auth/register \
-     -H "Content-Type: application/json" \
-     -d '{"email": "you@company.com", "password": "...", "company": "Acme", "role": "developer"}'
-   ```
-3. Your API key (`shrike_...`) is returned in the response — use it as `shrike_api_key` in the SDK.
+**Get your free API key:** Register at [shrikesecurity.com/signup](https://shrikesecurity.com/signup) — your API key (`shrike_...`) is returned instantly.
 
 ## Installation
 
@@ -283,10 +274,10 @@ export SHRIKE_ENDPOINT="https://your-shrike-instance.com"
 
 ### Why Input-Only Scanning?
 
-Shrike Guard focuses on **pre-flight protection** - blocking malicious prompts BEFORE they reach the LLM. This:
+Shrike Guard focuses on **pre-flight protection** — blocking malicious prompts BEFORE they reach the LLM. This:
 - Prevents prompt injection attacks at the source
 - Has zero latency impact on LLM responses
-- Catches 95%+ of threats (attacks are in the INPUT)
+- Catches the vast majority of threats at the input layer
 
 ## License
 
