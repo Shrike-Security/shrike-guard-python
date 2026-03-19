@@ -59,6 +59,7 @@ from .exceptions import (
     ShrikeScanError,
 )
 from .scanner import AsyncScanClient, ScanClient, get_scan_headers
+from .auth import AuthClient
 from .sanitizer import sanitize_scan_response, normalize_threat_type, bucket_confidence, derive_severity
 from ._version import __version__, __version_info__
 
@@ -87,6 +88,8 @@ __all__ = [
     "ShrikeAsyncAnthropic",
     # Gemini client (requires: pip install shrike-guard[gemini])
     "ShrikeGemini",
+    # Auth client
+    "AuthClient",
     # Low-level scan clients
     "ScanClient",
     "AsyncScanClient",
