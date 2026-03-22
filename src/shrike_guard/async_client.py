@@ -9,10 +9,20 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from .config import DEFAULT_ENDPOINT, DEFAULT_FAIL_MODE, DEFAULT_SCAN_TIMEOUT, FailMode
 from .exceptions import ShrikeBlockedError, ShrikeScanError
+from .resilience import CircuitBreaker, CircuitOpenError, async_retry_with_backoff
 from .sanitizer import sanitize_scan_response
 from .scanner import get_scan_headers
 
 logger = logging.getLogger("shrike-guard")
+
+
+def _is_retryable(e: Exception) -> bool:
+    """Determine if an error should be retried."""
+    if isinstance(e, CircuitOpenError):
+        return False
+    if isinstance(e, httpx.HTTPStatusError):
+        return e.response.status_code >= 500
+    return isinstance(e, (httpx.TimeoutException, httpx.ConnectError, ConnectionError))
 
 
 class ShrikeAsyncOpenAI:
@@ -50,6 +60,7 @@ class ShrikeAsyncOpenAI:
         shrike_endpoint: str = DEFAULT_ENDPOINT,
         fail_mode: Union[str, FailMode] = DEFAULT_FAIL_MODE,
         scan_timeout: float = DEFAULT_SCAN_TIMEOUT,
+        circuit_breaker: Optional[CircuitBreaker] = None,
         **openai_kwargs: Any,
     ) -> None:
         """Initialize the ShrikeAsyncOpenAI client.
@@ -60,6 +71,7 @@ class ShrikeAsyncOpenAI:
             shrike_endpoint: Shrike API endpoint URL.
             fail_mode: Behavior on scan failure - "open" (allow) or "closed" (block).
             scan_timeout: Timeout for scan requests in seconds.
+            circuit_breaker: Optional shared CircuitBreaker instance.
             **openai_kwargs: Additional arguments passed to the AsyncOpenAI client.
         """
         self._openai = AsyncOpenAI(api_key=api_key, **openai_kwargs)
@@ -68,22 +80,13 @@ class ShrikeAsyncOpenAI:
         self._fail_mode = FailMode(fail_mode) if isinstance(fail_mode, str) else fail_mode
         self._scan_timeout = scan_timeout
         self._http = httpx.AsyncClient(timeout=scan_timeout)
-
-        # Note: All scanning is done via backend API (tier-based: free=L1-L4, paid=L1-L8)
-        # No local scanning - backend has full regex patterns (~50+) and normalizers
+        self._circuit_breaker = circuit_breaker or CircuitBreaker()
 
         # Expose chat interface
         self.chat = _AsyncChatNamespace(self)
 
     def _extract_user_content(self, messages: List[Dict[str, Any]]) -> str:
-        """Extract all user message content from a messages list.
-
-        Args:
-            messages: List of message dictionaries with 'role' and 'content'.
-
-        Returns:
-            Concatenated string of all user message content.
-        """
+        """Extract all user message content from a messages list."""
         user_contents = []
         for msg in messages:
             if msg.get("role") == "user":
@@ -91,55 +94,41 @@ class ShrikeAsyncOpenAI:
                 if isinstance(content, str):
                     user_contents.append(content)
                 elif isinstance(content, list):
-                    # Handle multimodal content (list of content parts)
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "text":
                             user_contents.append(part.get("text", ""))
         return "\n".join(user_contents)
 
     async def _scan_messages(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Scan user messages for security threats via backend API.
-
-        Always calls backend - backend handles tier-based scanning:
-        - Free tier (no API key): L1-L4 (regex, unicode, encoding, token normalization)
-        - Paid tier: L1-L8 (full scan including LLM)
-
-        Args:
-            messages: List of message dictionaries to scan.
-
-        Returns:
-            Scan result dictionary with 'safe' boolean and additional details.
-        """
+        """Scan user messages for security threats via backend API."""
         user_content = self._extract_user_content(messages)
 
         if not user_content.strip():
             return {"safe": True, "reason": "No user content to scan"}
 
-        # Always call backend API - tier detection happens server-side
         return await self._remote_scan(user_content)
 
     async def _remote_scan(self, prompt: str) -> Dict[str, Any]:
-        """Full scan via Shrike backend API.
-
-        Backend handles tier-based scanning automatically based on API key presence.
-
-        Args:
-            prompt: The prompt text to scan.
-
-        Returns:
-            Scan result dictionary.
-        """
-        try:
-            response = await self._http.post(
-                f"{self._shrike_endpoint}/scan",
-                json={"prompt": prompt},
-                headers=get_scan_headers(self._shrike_api_key),
+        """Full scan via Shrike backend API with circuit breaker and retry."""
+        async def _do_scan() -> Dict[str, Any]:
+            return await async_retry_with_backoff(
+                lambda: self._do_http_scan(
+                    f"{self._shrike_endpoint}/scan",
+                    {"prompt": prompt},
+                ),
+                max_attempts=3,
+                is_retryable=_is_retryable,
             )
-            response.raise_for_status()
-            return sanitize_scan_response(response.json())
+
+        try:
+            return await self._circuit_breaker.execute_async(_do_scan)
+        except CircuitOpenError:
+            if self._fail_mode == FailMode.OPEN:
+                logger.warning("Circuit breaker open, failing open (allowing request)")
+                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+            raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
-                # No local fallback - just fail open
                 logger.warning("Scan request timed out, failing open (allowing request)")
                 return {"safe": True, "reason": "Scan timeout, failing open"}
             raise ShrikeScanError("Scan request timed out and fail_mode is 'closed'")
@@ -152,44 +141,45 @@ class ShrikeAsyncOpenAI:
                 return {"safe": True, "reason": f"Scan error: {str(e)}"}
             raise ShrikeScanError(f"Scan failed: {str(e)}")
 
+    async def _do_http_scan(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single async HTTP scan request."""
+        response = await self._http.post(
+            url,
+            json=payload,
+            headers=get_scan_headers(self._shrike_api_key),
+        )
+        response.raise_for_status()
+        return sanitize_scan_response(response.json())
+
     async def scan_sql(
         self,
         query: str,
         database: Optional[str] = None,
         allow_destructive: bool = False,
     ) -> Dict[str, Any]:
-        """Scan a SQL query for injection attacks and dangerous operations.
+        """Scan a SQL query for injection attacks and dangerous operations."""
+        payload = {
+            "content": query,
+            "content_type": "sql",
+            "context": {
+                "database": database or "",
+                "allow_destructive": str(allow_destructive).lower(),
+            },
+        }
+        url = f"{self._shrike_endpoint}/api/scan/specialized"
 
-        Use this to validate AI-generated SQL before execution.
-
-        Args:
-            query: The SQL query to scan.
-            database: Optional database name for context.
-            allow_destructive: If True, allows DROP/TRUNCATE operations.
-
-        Returns:
-            Scan result with 'safe' boolean, 'threat_level', 'issues', etc.
-
-        Example:
-            >>> result = await client.scan_sql("SELECT * FROM users WHERE id = 1")
-            >>> if result['safe']:
-            ...     await cursor.execute(query)
-        """
         try:
-            response = await self._http.post(
-                f"{self._shrike_endpoint}/api/scan/specialized",
-                json={
-                    "content": query,
-                    "content_type": "sql",
-                    "context": {
-                        "database": database or "",
-                        "allow_destructive": str(allow_destructive).lower(),
-                    },
-                },
-                headers=get_scan_headers(self._shrike_api_key),
+            return await self._circuit_breaker.execute_async(
+                lambda: async_retry_with_backoff(
+                    lambda: self._do_http_scan(url, payload),
+                    max_attempts=3,
+                    is_retryable=_is_retryable,
+                )
             )
-            response.raise_for_status()
-            return sanitize_scan_response(response.json())
+        except CircuitOpenError:
+            if self._fail_mode == FailMode.OPEN:
+                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+            raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 return {"safe": True, "reason": "Scan timeout, failing open"}
@@ -204,23 +194,7 @@ class ShrikeAsyncOpenAI:
         path: str,
         content: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Scan a file path (and optionally content) for security risks.
-
-        Use this to validate AI-suggested file paths before writing.
-
-        Args:
-            path: The file path to validate.
-            content: Optional file content to scan for secrets/PII.
-
-        Returns:
-            Scan result with 'safe' boolean, 'threat_type', 'reason', etc.
-
-        Example:
-            >>> result = await client.scan_file("/tmp/config.json", content)
-            >>> if result['safe']:
-            ...     async with aiofiles.open(path, 'w') as f:
-            ...         await f.write(content)
-        """
+        """Scan a file path (and optionally content) for security risks."""
         content_type = "file_content" if content else "file_path"
         payload: Dict[str, Any] = {
             "content": path,
@@ -229,14 +203,19 @@ class ShrikeAsyncOpenAI:
         if content:
             payload["context"] = {"file_content": content}
 
+        url = f"{self._shrike_endpoint}/api/scan/specialized"
         try:
-            response = await self._http.post(
-                f"{self._shrike_endpoint}/api/scan/specialized",
-                json=payload,
-                headers=get_scan_headers(self._shrike_api_key),
+            return await self._circuit_breaker.execute_async(
+                lambda: async_retry_with_backoff(
+                    lambda: self._do_http_scan(url, payload),
+                    max_attempts=3,
+                    is_retryable=_is_retryable,
+                )
             )
-            response.raise_for_status()
-            return sanitize_scan_response(response.json())
+        except CircuitOpenError:
+            if self._fail_mode == FailMode.OPEN:
+                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+            raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 return {"safe": True, "reason": "Scan timeout, failing open"}
@@ -278,23 +257,7 @@ class _AsyncCompletionsNamespace:
         stream: bool = False,
         **kwargs: Any,
     ) -> Union[ChatCompletion, AsyncIterator[ChatCompletionChunk]]:
-        """Create a chat completion with security scanning.
-
-        This method scans the user messages before sending them to OpenAI.
-        If the scan detects a security threat, a ShrikeBlockedError is raised.
-
-        Args:
-            messages: List of message dictionaries for the conversation.
-            stream: Whether to stream the response.
-            **kwargs: Additional arguments passed to the OpenAI API.
-
-        Returns:
-            ChatCompletion object or async iterator of ChatCompletionChunk objects.
-
-        Raises:
-            ShrikeBlockedError: If the prompt is blocked by security scan.
-            ShrikeScanError: If scan fails and fail_mode is 'closed'.
-        """
+        """Create a chat completion with security scanning."""
         # 1. Scan messages for security threats
         scan_result = await self._client._scan_messages(messages)
 

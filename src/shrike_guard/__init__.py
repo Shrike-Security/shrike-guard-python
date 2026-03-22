@@ -59,6 +59,7 @@ from .exceptions import (
     ShrikeScanError,
 )
 from .scanner import AsyncScanClient, ScanClient, get_scan_headers
+from .resilience import CircuitBreaker, CircuitOpenError, CircuitState, retry_with_backoff, async_retry_with_backoff
 from .auth import AuthClient
 from .sanitizer import sanitize_scan_response, normalize_threat_type, bucket_confidence, derive_severity
 from ._version import __version__, __version_info__
@@ -104,6 +105,12 @@ __all__ = [
     "DEFAULT_ENDPOINT",
     "DEFAULT_FAIL_MODE",
     "DEFAULT_SCAN_TIMEOUT",
+    # Resilience
+    "CircuitBreaker",
+    "CircuitOpenError",
+    "CircuitState",
+    "retry_with_backoff",
+    "async_retry_with_backoff",
     # Exceptions
     "ShrikeError",
     "ShrikeScanError",

@@ -9,10 +9,22 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from .config import DEFAULT_ENDPOINT, DEFAULT_FAIL_MODE, DEFAULT_SCAN_TIMEOUT, FailMode
 from .exceptions import ShrikeBlockedError, ShrikeScanError
+from .resilience import CircuitBreaker, CircuitOpenError, retry_with_backoff
 from .sanitizer import sanitize_scan_response
 from .scanner import get_scan_headers
 
 logger = logging.getLogger("shrike-guard")
+
+
+def _is_retryable(e: Exception) -> bool:
+    """Determine if an error should be retried."""
+    if isinstance(e, CircuitOpenError):
+        return False
+    if isinstance(e, httpx.HTTPStatusError):
+        # Retry 5xx (server errors), don't retry 4xx (client errors)
+        return e.response.status_code >= 500
+    # Retry timeouts and connection errors
+    return isinstance(e, (httpx.TimeoutException, httpx.ConnectError, ConnectionError))
 
 
 class ShrikeOpenAI:
@@ -44,6 +56,7 @@ class ShrikeOpenAI:
         shrike_endpoint: str = DEFAULT_ENDPOINT,
         fail_mode: Union[str, FailMode] = DEFAULT_FAIL_MODE,
         scan_timeout: float = DEFAULT_SCAN_TIMEOUT,
+        circuit_breaker: Optional[CircuitBreaker] = None,
         **openai_kwargs: Any,
     ) -> None:
         """Initialize the ShrikeOpenAI client.
@@ -54,6 +67,8 @@ class ShrikeOpenAI:
             shrike_endpoint: Shrike API endpoint URL.
             fail_mode: Behavior on scan failure - "open" (allow) or "closed" (block).
             scan_timeout: Timeout for scan requests in seconds.
+            circuit_breaker: Optional shared CircuitBreaker instance. If not
+                provided, a default one is created (5 failures → open, 30s timeout).
             **openai_kwargs: Additional arguments passed to the OpenAI client.
         """
         self._openai = OpenAI(api_key=api_key, **openai_kwargs)
@@ -62,9 +77,7 @@ class ShrikeOpenAI:
         self._fail_mode = FailMode(fail_mode) if isinstance(fail_mode, str) else fail_mode
         self._scan_timeout = scan_timeout
         self._http = httpx.Client(timeout=scan_timeout)
-
-        # Note: All scanning is done via backend API (tier-based: free=L1-L4, paid=L1-L8)
-        # No local scanning - backend has full regex patterns (~50+) and normalizers
+        self._circuit_breaker = circuit_breaker or CircuitBreaker()
 
         # Expose chat interface
         self.chat = _ChatNamespace(self)
@@ -113,9 +126,9 @@ class ShrikeOpenAI:
         return self._remote_scan(user_content)
 
     def _remote_scan(self, prompt: str) -> Dict[str, Any]:
-        """Full scan via Shrike backend API.
+        """Full scan via Shrike backend API with circuit breaker and retry.
 
-        Backend handles tier-based scanning automatically based on API key presence.
+        Flow: circuit breaker → retry with backoff → HTTP call.
 
         Args:
             prompt: The prompt text to scan.
@@ -123,17 +136,25 @@ class ShrikeOpenAI:
         Returns:
             Scan result dictionary.
         """
-        try:
-            response = self._http.post(
-                f"{self._shrike_endpoint}/scan",
-                json={"prompt": prompt},
-                headers=get_scan_headers(self._shrike_api_key),
+        def _do_scan() -> Dict[str, Any]:
+            return retry_with_backoff(
+                lambda: self._do_http_scan(
+                    f"{self._shrike_endpoint}/scan",
+                    {"prompt": prompt},
+                ),
+                max_attempts=3,
+                is_retryable=_is_retryable,
             )
-            response.raise_for_status()
-            return sanitize_scan_response(response.json())
+
+        try:
+            return self._circuit_breaker.execute(_do_scan)
+        except CircuitOpenError:
+            if self._fail_mode == FailMode.OPEN:
+                logger.warning("Circuit breaker open, failing open (allowing request)")
+                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+            raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
-                # No local fallback - just fail open
                 logger.warning("Scan request timed out, failing open (allowing request)")
                 return {"safe": True, "reason": "Scan timeout, failing open"}
             raise ShrikeScanError("Scan request timed out and fail_mode is 'closed'")
@@ -145,6 +166,16 @@ class ShrikeOpenAI:
             if self._fail_mode == FailMode.OPEN:
                 return {"safe": True, "reason": f"Scan error: {str(e)}"}
             raise ShrikeScanError(f"Scan failed: {str(e)}")
+
+    def _do_http_scan(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single HTTP scan request."""
+        response = self._http.post(
+            url,
+            json=payload,
+            headers=get_scan_headers(self._shrike_api_key),
+        )
+        response.raise_for_status()
+        return sanitize_scan_response(response.json())
 
     def scan_sql(
         self,
@@ -169,21 +200,28 @@ class ShrikeOpenAI:
             >>> if result['safe']:
             ...     cursor.execute(query)
         """
+        payload = {
+            "content": query,
+            "content_type": "sql",
+            "context": {
+                "database": database or "",
+                "allow_destructive": str(allow_destructive).lower(),
+            },
+        }
+        url = f"{self._shrike_endpoint}/api/scan/specialized"
+
         try:
-            response = self._http.post(
-                f"{self._shrike_endpoint}/api/scan/specialized",
-                json={
-                    "content": query,
-                    "content_type": "sql",
-                    "context": {
-                        "database": database or "",
-                        "allow_destructive": str(allow_destructive).lower(),
-                    },
-                },
-                headers=get_scan_headers(self._shrike_api_key),
+            return self._circuit_breaker.execute(
+                lambda: retry_with_backoff(
+                    lambda: self._do_http_scan(url, payload),
+                    max_attempts=3,
+                    is_retryable=_is_retryable,
+                )
             )
-            response.raise_for_status()
-            return sanitize_scan_response(response.json())
+        except CircuitOpenError:
+            if self._fail_mode == FailMode.OPEN:
+                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+            raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 return {"safe": True, "reason": "Scan timeout, failing open"}
@@ -223,14 +261,19 @@ class ShrikeOpenAI:
         if content:
             payload["context"] = {"file_content": content}
 
+        url = f"{self._shrike_endpoint}/api/scan/specialized"
         try:
-            response = self._http.post(
-                f"{self._shrike_endpoint}/api/scan/specialized",
-                json=payload,
-                headers=get_scan_headers(self._shrike_api_key),
+            return self._circuit_breaker.execute(
+                lambda: retry_with_backoff(
+                    lambda: self._do_http_scan(url, payload),
+                    max_attempts=3,
+                    is_retryable=_is_retryable,
+                )
             )
-            response.raise_for_status()
-            return sanitize_scan_response(response.json())
+        except CircuitOpenError:
+            if self._fail_mode == FailMode.OPEN:
+                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+            raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 return {"safe": True, "reason": "Scan timeout, failing open"}
