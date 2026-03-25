@@ -1,9 +1,12 @@
 """HTTP client for the Shrike scan API."""
 
+import logging
 import uuid
 from typing import Any, Dict, Optional
 
 import httpx
+
+logger = logging.getLogger("shrike-guard")
 
 from ._version import __version__
 from .config import DEFAULT_ENDPOINT, DEFAULT_SCAN_TIMEOUT, SDK_NAME
@@ -34,6 +37,23 @@ def _check_content_size(content: str, context: Optional[str] = None) -> Optional
             ],
         }
     return None
+
+
+def maybe_add_signup_hint(result: Dict[str, Any], api_key: str) -> Dict[str, Any]:
+    """Append a signup hint to scan results when running without an API key.
+
+    When no API key is configured, the user gets regex-only scanning.
+    This hint tells agents/users how to upgrade to full scanning.
+    """
+    if api_key:
+        return result
+    return {
+        **result,
+        "_note": (
+            "Running without API key (regex-only). "
+            "For LLM-powered analysis and session correlation, run: npx shrike-mcp --signup"
+        ),
+    }
 
 
 def get_scan_headers(shrike_api_key: str, request_id: Optional[str] = None) -> Dict[str, str]:
@@ -77,6 +97,10 @@ class ScanClient:
         self._timeout = timeout
         self._http = httpx.Client(timeout=timeout)
 
+        if not self._api_key:
+            logger.warning("[shrike-guard] No API key provided — running in free tier (regex-only).")
+            logger.warning("[shrike-guard] For full scanning: npx shrike-mcp --signup")
+
     def scan(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
         """Scan a prompt for security threats.
 
@@ -106,7 +130,7 @@ class ScanClient:
             headers=get_scan_headers(self._api_key),
         )
         response.raise_for_status()
-        return sanitize_scan_response(response.json())
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
     def scan_sql(
         self,
@@ -143,7 +167,7 @@ class ScanClient:
             headers=get_scan_headers(self._api_key),
         )
         response.raise_for_status()
-        return sanitize_scan_response(response.json())
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
     def scan_file(
         self,
@@ -177,7 +201,7 @@ class ScanClient:
             headers=get_scan_headers(self._api_key),
         )
         response.raise_for_status()
-        return sanitize_scan_response(response.json())
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
     def close(self) -> None:
         """Close the HTTP client."""
@@ -211,6 +235,10 @@ class AsyncScanClient:
         self._timeout = timeout
         self._http = httpx.AsyncClient(timeout=timeout)
 
+        if not self._api_key:
+            logger.warning("[shrike-guard] No API key provided — running in free tier (regex-only).")
+            logger.warning("[shrike-guard] For full scanning: npx shrike-mcp --signup")
+
     async def scan(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
         """Scan a prompt for security threats.
 
@@ -240,7 +268,7 @@ class AsyncScanClient:
             headers=get_scan_headers(self._api_key),
         )
         response.raise_for_status()
-        return sanitize_scan_response(response.json())
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
     async def scan_sql(
         self,
@@ -277,7 +305,7 @@ class AsyncScanClient:
             headers=get_scan_headers(self._api_key),
         )
         response.raise_for_status()
-        return sanitize_scan_response(response.json())
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
     async def scan_file(
         self,
@@ -311,7 +339,7 @@ class AsyncScanClient:
             headers=get_scan_headers(self._api_key),
         )
         response.raise_for_status()
-        return sanitize_scan_response(response.json())
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
     async def close(self) -> None:
         """Close the HTTP client."""

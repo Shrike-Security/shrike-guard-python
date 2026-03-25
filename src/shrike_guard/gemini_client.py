@@ -12,7 +12,7 @@ import httpx
 from .config import DEFAULT_ENDPOINT, DEFAULT_FAIL_MODE, DEFAULT_SCAN_TIMEOUT, FailMode
 from .exceptions import ShrikeBlockedError, ShrikeScanError
 from .sanitizer import sanitize_scan_response
-from .scanner import get_scan_headers
+from .scanner import get_scan_headers, maybe_add_signup_hint
 
 logger = logging.getLogger("shrike-guard")
 
@@ -103,6 +103,10 @@ class ShrikeGemini:
         # Note: All scanning is done via backend API (tier-based: free=L1-L4, paid=L1-L8)
         # No local scanning - backend has full regex patterns (~50+) and normalizers
 
+        if not self._shrike_api_key:
+            logger.warning("[shrike-guard] No shrike_api_key provided — running in free tier (regex-only).")
+            logger.warning("[shrike-guard] For full scanning (LLM analysis, session correlation): npx shrike-mcp --signup")
+
     def GenerativeModel(
         self,
         model_name: str,
@@ -186,7 +190,7 @@ class ShrikeGemini:
                 headers=get_scan_headers(self._shrike_api_key),
             )
             response.raise_for_status()
-            return sanitize_scan_response(response.json())
+            return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._shrike_api_key)
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 # No local fallback - just fail open

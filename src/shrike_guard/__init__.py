@@ -58,7 +58,7 @@ from .exceptions import (
     ShrikeError,
     ShrikeScanError,
 )
-from .scanner import AsyncScanClient, ScanClient, get_scan_headers
+from .scanner import AsyncScanClient, ScanClient, get_scan_headers, maybe_add_signup_hint
 from .resilience import CircuitBreaker, CircuitOpenError, CircuitState, retry_with_backoff, async_retry_with_backoff
 from .auth import AuthClient
 from .sanitizer import sanitize_scan_response, normalize_threat_type, bucket_confidence, derive_severity
