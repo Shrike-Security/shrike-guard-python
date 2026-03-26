@@ -42,16 +42,19 @@ def _check_content_size(content: str, context: Optional[str] = None) -> Optional
 def maybe_add_signup_hint(result: Dict[str, Any], api_key: str) -> Dict[str, Any]:
     """Append a signup hint to scan results when running without an API key.
 
-    When no API key is configured, the user gets regex-only scanning.
-    This hint tells agents/users how to upgrade to full scanning.
+    When no API key is configured, the user gets L1-L5 only scanning.
+    This hint tells agents/users how to register for cognitive threat detection.
     """
     if api_key:
+        return result
+    # Don't override if backend already provided upgrade_hint
+    if result.get("upgrade_hint"):
         return result
     return {
         **result,
         "_note": (
-            "Running without API key (regex-only). "
-            "For LLM-powered analysis and session correlation, run: npx shrike-mcp --signup"
+            "Running without API key (L1-L5 only). "
+            "Register free for cognitive threat detection: npx shrike-mcp --signup"
         ),
     }
 
