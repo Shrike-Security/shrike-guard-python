@@ -1,44 +1,43 @@
 [tool.poetry]
 name = "shrike-guard"
-version = "1.1.1"
-description = "Shrike Security SDK - Protect your LLM applications (OpenAI, Claude, Gemini) from prompt injection, PII leakage, and jailbreaks"
-authors = ["Shrike Security <security@shrike.com>"]
+version = "1.1.2"
+description = "Shrike SDK for AI agent action governance — drop-in wrapper for OpenAI, Anthropic, and Gemini that governs every tool call, prompt, and response server-side. Allow / approve / block. Free tier available."
+authors = ["Shrike Security <security@shrikesecurity.com>"]
 readme = "README.md"
 license = "Apache-2.0"
-keywords = ["openai", "anthropic", "claude", "gemini", "security", "llm", "prompt-injection", "pii", "jailbreak", "ai-safety"]
+keywords = ["action-governance", "ai-agents", "agent-security", "agent-governance", "tool-call-gating", "ai-governance", "openai", "anthropic", "claude", "gemini", "llm", "prompt-injection", "pii", "jailbreak", "ai-safety"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 packages = [{include = "shrike_guard", from = "src"}]
 
 [tool.poetry.urls]
-"Homepage" = "https://shrike.security"
-"Documentation" = "https://docs.shrike.security/sdk/python"
-"Repository" = "https://github.com/shrike-security/shrike-guard"
-"Bug Tracker" = "https://github.com/shrike-security/shrike-guard/issues"
+"Homepage" = "https://shrikesecurity.com"
+"Documentation" = "https://shrikesecurity.com/docs/sdk"
+"Repository" = "https://github.com/Shrike-Security/shrike-guard-python"
+"Bug Tracker" = "https://github.com/Shrike-Security/shrike-guard-python/issues"
 
 [tool.poetry.dependencies]
-python = "^3.8"
-httpx = "^0.27.0"
+python = "^3.10"
+httpx = "^0.28.1"
 # Core provider (always available)
 openai = ">=1.0.0,<2.0.0"
 # Optional providers
 anthropic = {version = ">=0.18.0,<1.0.0", optional = true}
-google-generativeai = {version = ">=0.3.0,<1.0.0", optional = true}
+google-genai = {version = ">=1.0.0,<2.0.0", optional = true}
 
 [tool.poetry.extras]
 anthropic = ["anthropic"]
-gemini = ["google-generativeai"]
-all = ["anthropic", "google-generativeai"]
+gemini = ["google-genai"]
+all = ["anthropic", "google-genai"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -54,14 +53,14 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
