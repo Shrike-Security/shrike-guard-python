@@ -7,11 +7,12 @@ import httpx
 from openai import OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
+from ._results import fail_open_result
 from .config import DEFAULT_ENDPOINT, DEFAULT_FAIL_MODE, DEFAULT_SCAN_TIMEOUT, FailMode
 from .exceptions import ShrikeBlockedError, ShrikeScanError
 from .resilience import CircuitBreaker, CircuitOpenError, retry_with_backoff
 from .sanitizer import sanitize_scan_response
-from .scanner import get_scan_headers, maybe_add_signup_hint
+from .scanner import _check_rate_limited, _is_blocked, get_scan_headers, maybe_add_signup_hint
 
 logger = logging.getLogger("shrike-guard")
 
@@ -143,7 +144,7 @@ class ShrikeOpenAI:
         def _do_scan() -> Dict[str, Any]:
             return retry_with_backoff(
                 lambda: self._do_http_scan(
-                    f"{self._shrike_endpoint}/scan",
+                    f"{self._shrike_endpoint}/api/scan/enforce",
                     {"prompt": prompt},
                 ),
                 max_attempts=3,
@@ -155,20 +156,20 @@ class ShrikeOpenAI:
         except CircuitOpenError:
             if self._fail_mode == FailMode.OPEN:
                 logger.warning("Circuit breaker open, failing open (allowing request)")
-                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+                return fail_open_result("Circuit breaker open, failing open")
             raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 logger.warning("Scan request timed out, failing open (allowing request)")
-                return {"safe": True, "reason": "Scan timeout, failing open"}
+                return fail_open_result("Scan timeout, failing open")
             raise ShrikeScanError("Scan request timed out and fail_mode is 'closed'")
         except httpx.HTTPStatusError as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan API error: {e.response.status_code}"}
+                return fail_open_result(f"Scan API error: {e.response.status_code}")
             raise ShrikeScanError(f"Scan API returned error: {e.response.status_code}")
         except Exception as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan error: {str(e)}"}
+                return fail_open_result(f"Scan error: {str(e)}")
             raise ShrikeScanError(f"Scan failed: {str(e)}")
 
     def _do_http_scan(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -178,6 +179,7 @@ class ShrikeOpenAI:
             json=payload,
             headers=get_scan_headers(self._shrike_api_key),
         )
+        _check_rate_limited(response)
         response.raise_for_status()
         return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._shrike_api_key)
 
@@ -212,7 +214,7 @@ class ShrikeOpenAI:
                 "allow_destructive": str(allow_destructive).lower(),
             },
         }
-        url = f"{self._shrike_endpoint}/api/scan/specialized"
+        url = f"{self._shrike_endpoint}/api/scan/enforce/specialized"
 
         try:
             return self._circuit_breaker.execute(
@@ -224,15 +226,15 @@ class ShrikeOpenAI:
             )
         except CircuitOpenError:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+                return fail_open_result("Circuit breaker open, failing open")
             raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": "Scan timeout, failing open"}
+                return fail_open_result("Scan timeout, failing open")
             raise ShrikeScanError("SQL scan request timed out")
         except Exception as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan error: {str(e)}"}
+                return fail_open_result(f"Scan error: {str(e)}")
             raise ShrikeScanError(f"SQL scan failed: {str(e)}")
 
     def scan_file(
@@ -265,7 +267,7 @@ class ShrikeOpenAI:
         if content:
             payload["context"] = {"file_content": content}
 
-        url = f"{self._shrike_endpoint}/api/scan/specialized"
+        url = f"{self._shrike_endpoint}/api/scan/enforce/specialized"
         try:
             return self._circuit_breaker.execute(
                 lambda: retry_with_backoff(
@@ -276,15 +278,15 @@ class ShrikeOpenAI:
             )
         except CircuitOpenError:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": "Circuit breaker open, failing open", "degraded": True}
+                return fail_open_result("Circuit breaker open, failing open")
             raise ShrikeScanError("Security service circuit breaker open")
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": "Scan timeout, failing open"}
+                return fail_open_result("Scan timeout, failing open")
             raise ShrikeScanError("File scan request timed out")
         except Exception as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan error: {str(e)}"}
+                return fail_open_result(f"Scan error: {str(e)}")
             raise ShrikeScanError(f"File scan failed: {str(e)}")
 
     def close(self) -> None:
@@ -339,8 +341,11 @@ class _CompletionsNamespace:
         # 1. Scan messages for security threats
         scan_result = self._client._scan_messages(messages)
 
-        # 2. Block if unsafe
-        if not scan_result.get("safe", True):
+        # 2. Block if unsafe. Prefer the server-authoritative `action` field
+        # emitted by /api/scan/enforce; fall back to the legacy `safe` boolean
+        # when the response predates the enforce endpoint (older backends,
+        # circuit-breaker fail-open synthetic verdicts).
+        if _is_blocked(scan_result):
             violations = scan_result.get("violations", [])
             raise ShrikeBlockedError(
                 message=f"Request blocked: {scan_result.get('reason', 'Security threat detected')}",

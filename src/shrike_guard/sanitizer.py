@@ -31,9 +31,12 @@ THREAT_TYPE_MAP: Dict[str, str] = {
     "completion_baiting": "jailbreak",
     "override": "jailbreak",
     "manipulate": "jailbreak",
-    "tonality_drift_profanity": "jailbreak",
+    # L8 tonality drift — backend normalizes profanity + hostile to
+    # toxic_content; casual stays as jailbreak (matches
+    # platform/common/models/response.go:309-313).
+    "tonality_drift_profanity": "toxic_content",
+    "tonality_drift_hostile": "toxic_content",
     "tonality_drift_casual": "jailbreak",
-    "tonality_drift_hostile": "jailbreak",
     # System prompt leak
     "system_prompt_leak": "system_prompt_leak",
     "system_prompt_extraction": "system_prompt_leak",
@@ -89,9 +92,11 @@ THREAT_TYPE_MAP: Dict[str, str] = {
     "suspicious_tld": "blocked_domain",
     "suspicious_domain": "blocked_domain",
     "malicious_url": "blocked_domain",
-    # Toxicity
-    "toxicity": "toxicity",
-    "harmful_content": "toxicity",
+    # Toxic content (canonical name as of the L7 rewrite). `toxicity` kept as
+    # a legacy alias so older backend builds + customer code don't break.
+    "toxic_content": "toxic_content",
+    "toxicity": "toxic_content",
+    "harmful_content": "toxic_content",
     # Malicious code
     "malicious_content": "malicious_code",
     "malicious_code": "malicious_code",
@@ -112,6 +117,12 @@ THREAT_TYPE_MAP: Dict[str, str] = {
     "privilege_escalation": "privilege_escalation",
     # Destructive operation
     "destructive_operation": "destructive_operation",
+    # L9 multi-turn correlation — the pseudo-category emitted when any
+    # multi_turn_* pattern fires (crescendo, blocked_retry, trust-building,
+    # memory_poisoning, etc.). The normalize_threat_type prefix check below
+    # handles the specific pattern names; this entry catches the pseudo
+    # value if the backend pre-normalizes.
+    "multi_turn_attack": "multi_turn_attack",
     # Errors
     "scan_error": "scan_error",
     "size_limit_exceeded": "size_limit_exceeded",
@@ -130,7 +141,9 @@ THREAT_GUIDANCE: Dict[str, str] = {
     "secrets_exposure": "This content contains patterns matching API keys, tokens, or credentials.",
     "pii_exposure": "This content contains personally identifiable information.",
     "blocked_domain": "This web search targets a restricted domain.",
+    "toxic_content": "This content contains potentially harmful or inappropriate language.",
     "toxicity": "This content contains potentially harmful or inappropriate language.",
+    "multi_turn_attack": "A pattern was detected across multiple turns of this session that suggests a coordinated attempt to bypass safety controls.",
     "malicious_code": "This content contains patterns associated with malicious code.",
     "harmful_intent": "This request contains content associated with harmful intent.",
     "social_engineering": "This prompt contains social engineering patterns.",
@@ -153,7 +166,9 @@ THREAT_SEVERITY: Dict[str, str] = {
     "secrets_exposure": "critical",
     "pii_exposure": "high",
     "blocked_domain": "medium",
+    "toxic_content": "medium",
     "toxicity": "medium",
+    "multi_turn_attack": "high",
     "malicious_code": "critical",
     "harmful_intent": "high",
     "social_engineering": "medium",
@@ -185,7 +200,18 @@ def normalize_threat_type(raw_type: Optional[str]) -> str:
     if not raw_type:
         return "unknown"
     normalized = raw_type.lower().replace("-", "_")
-    return THREAT_TYPE_MAP.get(normalized, "unknown")
+    mapped = THREAT_TYPE_MAP.get(normalized)
+    if mapped is not None:
+        return mapped
+    # L9 multi-turn correlation patterns flow as `multi_turn_<pattern>`
+    # (crescendo, blocked_retry, topic_pivot, threat_diversity,
+    #  safe_then_unsafe, tool_sequence_anomaly, coded_language_setup,
+    #  context_overflow, memory_poisoning, velocity_burst). Backend
+    # collapses these to multi_turn_attack — mirror the prefix logic
+    # from platform/common/models/response.go:380.
+    if normalized.startswith("multi_turn_"):
+        return "multi_turn_attack"
+    return "unknown"
 
 
 def derive_severity(threat_type: str, raw_severity: Optional[str] = None) -> str:
@@ -205,7 +231,11 @@ def bucket_confidence(score: Optional[float]) -> str:
 
     Protects IP by not exposing exact detection thresholds.
     """
-    if score is None:
+    # Guard against a non-numeric confidence (wrong type on the wire / a
+    # future backend shape). bool is a subclass of int in Python, so exclude
+    # it explicitly — a raw True/False is not a score. Mirrors the TS SDK's
+    # `typeof === 'number'` guard so neither client crashes on a bad type.
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
         return "medium"
     if score >= 0.9:
         return "high"
@@ -214,11 +244,42 @@ def bucket_confidence(score: Optional[float]) -> str:
     return "low"
 
 
+# Fields the sanitizer preserves from the raw response verbatim.
+# These are OUTCOME state (customer sees outcomes; timings/attribution stay
+# provider-only) — the contract-symmetry surface
+# (safe/refuse_tier/recovery/session_state on every response).
+_PRESERVED_GOVERNANCE_FIELDS = (
+    "action",
+    "refuse_tier",
+    "recovery",
+    "session_state",
+    "content_type",
+    "approval_info",
+    "client_session_rotation",
+)
+
+
+def _sanitize_violation(raw: Any) -> Optional[Dict[str, Any]]:
+    """Sanitize one entry from the backend violations[] array.
+
+    Preserves customer-visible outcome fields (severity, action, threat_type,
+    owasp_category, user_message, suggested_action); drops attribution
+    fields (policy_id, policy_name, matched_pattern, ai_reasoning, etc.).
+    """
+    if not isinstance(raw, dict):
+        return None
+    return {k: v for k, v in raw.items() if k not in _INTERNAL_FIELDS}
+
+
 def sanitize_scan_response(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Sanitize a raw backend scan response for IP protection.
 
-    Strips internal detection details, normalizes threat types,
-    and buckets confidence scores.
+    Strips internal detection attribution (layer timings, per-detector
+    confidences, pattern names, policy IDs) — NOT outcome state.
+    Preserves the four-state governance surface (`action`, `refuse_tier`,
+    `recovery`, `session_state`) so callers can distinguish
+    allow/warn/require_approval/block (contract symmetry — safe and refuse
+    verdicts carry the same governance fields).
 
     Args:
         raw: Raw response dict from the Shrike backend.
@@ -227,25 +288,51 @@ def sanitize_scan_response(raw: Dict[str, Any]) -> Dict[str, Any]:
         Sanitized response safe for external consumption.
     """
     safe = raw.get("safe", True)
+    result: Dict[str, Any] = {"safe": bool(safe)}
+
+    # Governance-outcome fields pass through on BOTH branches. This is the
+    # symmetric contract — a `warn` verdict (safe=True, action="warn") must
+    # carry recovery/refuse_tier the same as a `block` (safe=False).
+    for field in _PRESERVED_GOVERNANCE_FIELDS:
+        if field in raw and raw[field] is not None:
+            result[field] = raw[field]
+
+    # violations[] is a mixed shape — pass each entry through per-item
+    # sanitization to drop policy_id / policy_name / matched_pattern while
+    # keeping customer-visible severity, threat_type, owasp_category,
+    # user_message, suggested_action. Empty array is dropped (noise).
+    raw_violations = raw.get("violations")
+    if isinstance(raw_violations, list) and raw_violations:
+        cleaned = [v for v in (_sanitize_violation(item) for item in raw_violations) if v]
+        if cleaned:
+            result["violations"] = cleaned
 
     if safe:
-        return {
-            "safe": True,
-            "reason": raw.get("reason", ""),
-        }
+        # Safe branch: reason may carry advisory copy for warn tier.
+        result["reason"] = raw.get("reason", "")
+        return result
 
-    # Unsafe: normalize and sanitize
-    raw_threat_type = raw.get("threat_type", "unknown")
+    # Unsafe branch: derive threat classification for legacy callers that
+    # read top-level threat_type/severity/guidance. Backend `/api/scan/enforce`
+    # returns top-level threat_type=null and puts detail inside violations[];
+    # for those responses, prefer the first violation's threat_type when
+    # the raw top-level field is missing.
+    raw_threat_type = raw.get("threat_type")
+    if not raw_threat_type and isinstance(raw_violations, list) and raw_violations:
+        first = raw_violations[0]
+        if isinstance(first, dict):
+            raw_threat_type = first.get("threat_type")
+    if not raw_threat_type:
+        raw_threat_type = "unknown"
+
     threat_type = normalize_threat_type(raw_threat_type)
     confidence = bucket_confidence(raw.get("confidence"))
     severity = derive_severity(threat_type, raw.get("severity"))
     guidance = THREAT_GUIDANCE.get(threat_type, THREAT_GUIDANCE["unknown"])
 
-    return {
-        "safe": False,
-        "threat_type": threat_type,
-        "severity": severity,
-        "confidence": confidence,
-        "reason": raw.get("reason", guidance),
-        "guidance": guidance,
-    }
+    result["threat_type"] = threat_type
+    result["severity"] = severity
+    result["confidence"] = confidence
+    result["reason"] = raw.get("reason") or guidance
+    result["guidance"] = guidance
+    return result

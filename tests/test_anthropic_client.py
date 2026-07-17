@@ -122,7 +122,7 @@ class TestShrikeAnthropicInit:
             api_key="sk-ant-test",
             shrike_api_key="shrike-test",
         )
-        assert client._fail_mode == FailMode.OPEN
+        assert client._fail_mode == FailMode.CLOSED  # default is CLOSED (fail-closed)
         assert client._scan_timeout == 10.0
         assert client.messages is not None
         client.close()
@@ -491,7 +491,7 @@ class TestShrikeAsyncAnthropicInit:
                     api_key="sk-ant-test",
                     shrike_api_key="shrike-test",
                 )
-                assert client._fail_mode == FailMode.OPEN
+                assert client._fail_mode == FailMode.CLOSED  # default is CLOSED (fail-closed)
                 assert client._scan_timeout == 10.0
                 assert client.messages is not None
 

@@ -20,8 +20,9 @@ class ShrikeScanError(ShrikeError):
     - A network error occurs
     - The API returns an unexpected error
 
-    When fail_mode is 'open' (default), these errors are silently
-    handled and the request is allowed to proceed.
+    The default fail_mode is 'closed' (secure by default), so a scan
+    failure raises this exception. Set fail_mode='open' to instead
+    silently handle these errors and allow the request to proceed.
     """
 
     pass
@@ -62,3 +63,34 @@ class ShrikeConfigError(ShrikeError):
     """Raised when there's a configuration error in the SDK."""
 
     pass
+
+
+class ShrikeRateLimitError(ShrikeScanError):
+    """Raised when the Shrike backend returns 429 Too Many Requests.
+
+    Extends :class:`ShrikeScanError` so callers with generic scan-error
+    handling continue to work unchanged; callers that want to distinguish
+    rate-limit failure from other scan failures can catch this class
+    specifically and back off / retry.
+
+    Mirrors the TypeScript SDK's :class:`ShrikeRateLimitError`.
+
+    Attributes:
+        retry_after: Seconds the caller should wait before retrying, if
+            the backend supplied a ``Retry-After`` header. ``None`` when
+            the header was absent or unparseable.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        retry_after: Optional[float] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        merged: Dict[str, Any] = {"status_code": 429}
+        if retry_after is not None:
+            merged["retry_after"] = retry_after
+        if details:
+            merged.update(details)
+        super().__init__(message, merged)
+        self.retry_after = retry_after

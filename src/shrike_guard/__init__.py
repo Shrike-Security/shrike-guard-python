@@ -42,9 +42,9 @@ Gemini:
     >>> response = model.generate_content("Hello!")
 
 Configuration:
-    - fail_mode="open" (default): Allow requests on scan failure
-    - fail_mode="closed": Block requests on scan failure
-    - scan_timeout: Timeout for scan requests (default: 2.0 seconds)
+    - fail_mode="closed" (default): Block requests on scan failure (secure by default)
+    - fail_mode="open": Allow requests on scan failure (availability over enforcement)
+    - scan_timeout: Timeout for scan requests (default: 10.0 seconds)
 
 For more information, see: https://docs.shrike.security/sdk/python
 """
@@ -56,12 +56,33 @@ from .exceptions import (
     ShrikeBlockedError,
     ShrikeConfigError,
     ShrikeError,
+    ShrikeRateLimitError,
     ShrikeScanError,
+)
+from .rotation import (
+    ROTATION_THRESHOLD,
+    CallerOwnedRotationRecommendation,
+    ModuleOwnedRotation,
+    SessionRotation,
+    evaluate_rotation,
 )
 from .scanner import AsyncScanClient, ScanClient, get_scan_headers, maybe_add_signup_hint
 from .resilience import CircuitBreaker, CircuitOpenError, CircuitState, retry_with_backoff, async_retry_with_backoff
 from .auth import AuthClient
 from .sanitizer import sanitize_scan_response, normalize_threat_type, bucket_confidence, derive_severity
+from .formatters import format_block_feedback
+from .system_prompt import SYSTEM_PROMPT_VERSION, system_prompt
+from .pii_redactor import (
+    PIIPattern,
+    RedactionEntry,
+    RedactionResult,
+    get_pii_pattern_count,
+    get_redaction_summary,
+    redact_pii,
+    rehydrate_pii,
+    update_pii_patterns,
+)
+from .pii_sync import sync_pii_patterns
 from ._version import __version__, __version_info__
 
 # Optional provider imports (available when dependencies are installed)
@@ -100,6 +121,21 @@ __all__ = [
     "normalize_threat_type",
     "bucket_confidence",
     "derive_severity",
+    # Block-feedback formatter (self-consultation stack layer 4)
+    "format_block_feedback",
+    # 'Working with Shrike' canonical system-prompt block (self-consultation stack layer 1)
+    "system_prompt",
+    "SYSTEM_PROMPT_VERSION",
+    # PII redaction (client-side; mirrors MCP server)
+    "redact_pii",
+    "rehydrate_pii",
+    "get_redaction_summary",
+    "update_pii_patterns",
+    "get_pii_pattern_count",
+    "sync_pii_patterns",
+    "PIIPattern",
+    "RedactionEntry",
+    "RedactionResult",
     # Configuration
     "FailMode",
     "DEFAULT_ENDPOINT",
@@ -111,11 +147,18 @@ __all__ = [
     "CircuitState",
     "retry_with_backoff",
     "async_retry_with_backoff",
+    # Session rotation (two-shape record — mirrors TypeScript SDK + MCP client)
+    "evaluate_rotation",
+    "ROTATION_THRESHOLD",
+    "ModuleOwnedRotation",
+    "CallerOwnedRotationRecommendation",
+    "SessionRotation",
     # Exceptions
     "ShrikeError",
     "ShrikeScanError",
     "ShrikeBlockedError",
     "ShrikeConfigError",
+    "ShrikeRateLimitError",
     # Version
     "__version__",
     "__version_info__",

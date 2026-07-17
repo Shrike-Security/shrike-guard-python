@@ -5,15 +5,18 @@ from typing import Final
 
 
 class FailMode(str, Enum):
-    """Defines behavior when scan operations fail.
+    """Defines behavior when scan operations fail (timeout, network error, backend 5xx).
 
-    OPEN: Allow the request to proceed (fail-open). This is the default
-          behavior suitable for most applications where availability is
-          prioritized over strict security.
+    CLOSED: Block the request and raise ShrikeScanError when the scanner cannot
+            decide (default). This is the Zero Trust posture promised by the
+            Shrike platform — if the guard cannot evaluate the action, the action
+            does not proceed. Choose this for any security-sensitive workload.
 
-    CLOSED: Block the request and raise an exception (fail-closed). Use
-            this mode for security-critical applications where you'd rather
-            block potentially safe requests than allow unsafe ones through.
+    OPEN: Allow the request to proceed if the scanner fails. Use this when
+          availability is strictly prioritized over enforcement (e.g. non-
+          production experiments, internal tools where outages must not block
+          users). Note: a fail-open SDK provides no guard during backend outages,
+          which is when adversarial pressure is highest.
     """
 
     OPEN = "open"
@@ -22,7 +25,9 @@ class FailMode(str, Enum):
 
 # Default configuration values
 DEFAULT_SCAN_TIMEOUT: Final[float] = 10.0  # seconds (Cloud Run can have cold starts)
-DEFAULT_FAIL_MODE: Final[FailMode] = FailMode.OPEN
+# CLOSED is the secure default (matches the platform's Zero Trust contract).
+# Change to FailMode.OPEN explicitly if availability must outrank enforcement.
+DEFAULT_FAIL_MODE: Final[FailMode] = FailMode.CLOSED
 # Default uses load balancer for scalability. Override with endpoint param for VPC deployments.
 DEFAULT_ENDPOINT: Final[str] = "https://api.shrikesecurity.com/agent"
 

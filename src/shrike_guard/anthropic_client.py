@@ -5,10 +5,11 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 
 import httpx
 
+from ._results import fail_open_result
 from .config import DEFAULT_ENDPOINT, DEFAULT_FAIL_MODE, DEFAULT_SCAN_TIMEOUT, FailMode
 from .exceptions import ShrikeBlockedError, ShrikeScanError
 from .sanitizer import sanitize_scan_response
-from .scanner import get_scan_headers, maybe_add_signup_hint
+from .scanner import _check_rate_limited, _is_blocked, get_scan_headers, maybe_add_signup_hint
 
 logger = logging.getLogger("shrike-guard")
 
@@ -132,25 +133,26 @@ class ShrikeAnthropic:
         """
         try:
             response = self._http.post(
-                f"{self._shrike_endpoint}/scan",
+                f"{self._shrike_endpoint}/api/scan/enforce",
                 json={"prompt": prompt},
                 headers=get_scan_headers(self._shrike_api_key),
             )
+            _check_rate_limited(response)
             response.raise_for_status()
             return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._shrike_api_key)
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 # No local fallback - just fail open
                 logger.warning("Scan request timed out, failing open (allowing request)")
-                return {"safe": True, "reason": "Scan timeout, failing open"}
+                return fail_open_result("Scan timeout, failing open")
             raise ShrikeScanError("Scan request timed out and fail_mode is 'closed'")
         except httpx.HTTPStatusError as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan API error: {e.response.status_code}"}
+                return fail_open_result(f"Scan API error: {e.response.status_code}")
             raise ShrikeScanError(f"Scan API returned error: {e.response.status_code}")
         except Exception as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan error: {str(e)}"}
+                return fail_open_result(f"Scan error: {str(e)}")
             raise ShrikeScanError(f"Scan failed: {str(e)}")
 
     def close(self) -> None:
@@ -198,7 +200,7 @@ class _MessagesNamespace:
         scan_result = self._client._scan_messages(messages)
 
         # 2. Block if unsafe
-        if not scan_result.get("safe", True):
+        if _is_blocked(scan_result):
             raise ShrikeBlockedError(
                 message=scan_result.get("reason", "Request blocked by Shrike"),
                 threat_type=scan_result.get("threat_type"),
@@ -231,7 +233,7 @@ class _MessagesNamespace:
         scan_result = self._client._scan_messages(messages)
 
         # 2. Block if unsafe
-        if not scan_result.get("safe", True):
+        if _is_blocked(scan_result):
             raise ShrikeBlockedError(
                 message=scan_result.get("reason", "Request blocked by Shrike"),
                 threat_type=scan_result.get("threat_type"),
@@ -345,25 +347,26 @@ class ShrikeAsyncAnthropic:
         """
         try:
             response = await self._http.post(
-                f"{self._shrike_endpoint}/scan",
+                f"{self._shrike_endpoint}/api/scan/enforce",
                 json={"prompt": prompt},
                 headers=get_scan_headers(self._shrike_api_key),
             )
+            _check_rate_limited(response)
             response.raise_for_status()
             return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._shrike_api_key)
         except httpx.TimeoutException:
             if self._fail_mode == FailMode.OPEN:
                 # No local fallback - just fail open
                 logger.warning("Scan request timed out, failing open (allowing request)")
-                return {"safe": True, "reason": "Scan timeout, failing open"}
+                return fail_open_result("Scan timeout, failing open")
             raise ShrikeScanError("Scan request timed out and fail_mode is 'closed'")
         except httpx.HTTPStatusError as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan API error: {e.response.status_code}"}
+                return fail_open_result(f"Scan API error: {e.response.status_code}")
             raise ShrikeScanError(f"Scan API returned error: {e.response.status_code}")
         except Exception as e:
             if self._fail_mode == FailMode.OPEN:
-                return {"safe": True, "reason": f"Scan error: {str(e)}"}
+                return fail_open_result(f"Scan error: {str(e)}")
             raise ShrikeScanError(f"Scan failed: {str(e)}")
 
     async def close(self) -> None:
@@ -408,7 +411,7 @@ class _AsyncMessagesNamespace:
         scan_result = await self._client._scan_messages(messages)
 
         # 2. Block if unsafe
-        if not scan_result.get("safe", True):
+        if _is_blocked(scan_result):
             raise ShrikeBlockedError(
                 message=scan_result.get("reason", "Request blocked by Shrike"),
                 threat_type=scan_result.get("threat_type"),
@@ -441,7 +444,7 @@ class _AsyncMessagesNamespace:
         scan_result = await self._client._scan_messages(messages)
 
         # 2. Block if unsafe
-        if not scan_result.get("safe", True):
+        if _is_blocked(scan_result):
             raise ShrikeBlockedError(
                 message=scan_result.get("reason", "Request blocked by Shrike"),
                 threat_type=scan_result.get("threat_type"),
