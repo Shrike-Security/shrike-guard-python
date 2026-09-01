@@ -113,8 +113,8 @@ class ShrikeOpenAI:
         """Scan user messages for security threats via backend API.
 
         Always calls backend - backend handles tier-based scanning:
-        - Free tier (no API key): L1-L4 (regex, unicode, encoding, token normalization)
-        - Paid tier: L1-L8 (full scan including LLM)
+        - Community tier (no API key): L1-L5 (regex, unicode, malformed, encoding, token/semantic)
+        - Pro tier and above: L1-L9 (adds visual, LLM semantic, response intel, session correlation)
 
         Args:
             messages: List of message dictionaries to scan.

@@ -11,7 +11,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _dist_version
 
 # Keep this fallback in step with pyproject.toml for source-only checkouts.
-_FALLBACK_VERSION = "4.0.3"
+_FALLBACK_VERSION = "4.0.5"
 
 try:
     __version__ = _dist_version("shrike-guard")

@@ -1,5 +1,35 @@
 # Changelog
 
+## [4.0.5] - 2026-08-31
+
+### Added
+- **Custom endpoint for the Gemini wrapper (`base_url`).** `ShrikeGemini` now
+  accepts `base_url=` (and passes through arbitrary `genai.Client` keyword
+  arguments such as `http_options`), so Gemini calls can be routed to a
+  compatible gateway or proxy — parity with the OpenAI and Anthropic wrappers,
+  which already forwarded `base_url` via `**kwargs`. Honored by the
+  `google-genai` SDK; the legacy `google-generativeai` SDK logs that it cannot
+  redirect its endpoint. A caller-supplied `http_options` takes precedence.
+- **Documented local / self-hosted LLM governance.** New README section and
+  `examples/local_llm.py` show governing an OpenAI-compatible local runtime
+  (Ollama, vLLM, LM Studio) by forwarding `base_url` to `ShrikeOpenAI`. The
+  plumbing already worked; this makes it a supported, documented path.
+
+### Changed
+- **Provider dependency caps raised to allow current majors.** `openai` was
+  capped `<3.0.0` and `anthropic` `<1.0.0`, which excluded the current releases
+  (openai 3.x, anthropic 1.x) and could block installs for apps already on those
+  majors. Raised to `openai <4.0.0` and `anthropic <2.0.0` after verifying the
+  wrapper API surface we call (`chat.completions.create`, `messages.create`) is
+  unchanged on the new majors — the full test suite passes against openai 3.6.0
+  and anthropic 1.2.0. `google-genai` stays `<3.0.0` (current major is 2.x).
+
+## [4.0.4] - 2026-07-30
+
+### Fixed
+- **Package docstring pointed at an unresolvable docs domain.** The top-level `shrike_guard` docstring (shown by `help(shrike_guard)` and IDE hovers) linked to `docs.shrike.security`, which does not resolve. It now points at `shrikesecurity.com/docs/sdk/python`. Documentation-only fix.
+- **Stated Python floor corrected to match the package requirement.** The README badge and requirements section advertised Python 3.8+, while the package requires `>=3.10`. A 3.9 environment would have hit a resolver failure after reading the badge. Both now read 3.10+. No change to the actual supported range.
+
 ## [4.0.3] - 2026-07-17
 
 ### Fixed

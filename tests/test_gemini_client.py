@@ -95,6 +95,41 @@ class TestShrikeGeminiInit:
         assert isinstance(model, _ShrikeGenerativeModel)
         client.close()
 
+    def test_init_without_base_url_omits_http_options(self, mock_genai) -> None:
+        """No base_url -> genai.Client called without an http_options override."""
+        client = ShrikeGemini(api_key="test-key", shrike_api_key="shrike-test")
+        _, kwargs = mock_genai.Client.call_args
+        assert "http_options" not in kwargs
+        client.close()
+
+    def test_init_with_base_url_sets_http_options(self, mock_genai) -> None:
+        """A custom base_url is forwarded to genai.Client via http_options."""
+        client = ShrikeGemini(
+            api_key="test-key",
+            shrike_api_key="shrike-test",
+            base_url="https://gemini-gateway.internal/",  # trailing slash trimmed
+        )
+        _, kwargs = mock_genai.Client.call_args
+        assert "http_options" in kwargs
+        # HttpOptions is the real google-genai type here; it carries base_url.
+        assert kwargs["http_options"].base_url == "https://gemini-gateway.internal"
+        client.close()
+
+    def test_explicit_http_options_beats_base_url(self, mock_genai) -> None:
+        """Caller-supplied http_options wins over the base_url convenience arg."""
+        from google.genai.types import HttpOptions
+
+        sentinel = HttpOptions(base_url="https://explicit.example")
+        client = ShrikeGemini(
+            api_key="test-key",
+            shrike_api_key="shrike-test",
+            base_url="https://ignored.example",
+            http_options=sentinel,
+        )
+        _, kwargs = mock_genai.Client.call_args
+        assert kwargs["http_options"] is sentinel
+        client.close()
+
 
 class TestShrikeGeminiContentExtraction:
     """Test content extraction from various formats."""

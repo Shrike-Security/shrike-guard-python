@@ -20,12 +20,13 @@ logger = logging.getLogger("shrike-guard")
 # Try the new google.genai SDK first (recommended)
 try:
     from google import genai
-    from google.genai.types import GenerateContentResponse
+    from google.genai.types import GenerateContentResponse, HttpOptions
     GENAI_NEW_AVAILABLE = True
 except ImportError:
     GENAI_NEW_AVAILABLE = False
     genai = None  # type: ignore
     GenerateContentResponse = None  # type: ignore
+    HttpOptions = None  # type: ignore
 
 # Fall back to legacy google.generativeai SDK
 GENAI_LEGACY_AVAILABLE = False
@@ -67,6 +68,8 @@ class ShrikeGemini:
         shrike_endpoint: str = DEFAULT_ENDPOINT,
         fail_mode: Union[str, FailMode] = DEFAULT_FAIL_MODE,
         scan_timeout: float = DEFAULT_SCAN_TIMEOUT,
+        base_url: Optional[str] = None,
+        **client_kwargs: Any,
     ) -> None:
         """Initialize the Shrike-protected Gemini client.
 
@@ -76,6 +79,13 @@ class ShrikeGemini:
             shrike_endpoint: Shrike backend URL
             fail_mode: "open" (allow on scan failure) or "closed" (block on failure)
             scan_timeout: Timeout for scan requests in seconds
+            base_url: Optional custom endpoint for the Gemini API. Point this at a
+                Gemini-compatible gateway or proxy to route model calls elsewhere.
+                (For a local OpenAI-compatible server such as Ollama or vLLM, use
+                ShrikeOpenAI with base_url instead — that is the common local-LLM
+                path.) Only honored by the new google-genai SDK.
+            **client_kwargs: Additional keyword arguments passed to genai.Client
+                (new SDK only), e.g. http_options for advanced transport tuning.
         """
         if not GENAI_NEW_AVAILABLE and not GENAI_LEGACY_AVAILABLE:
             raise ImportError(
@@ -88,9 +98,20 @@ class ShrikeGemini:
 
         # Initialize the appropriate SDK
         if self._use_new_sdk:
-            self._client = genai.Client(api_key=api_key)
+            # base_url is applied via HttpOptions unless the caller supplied their
+            # own http_options in client_kwargs (that takes precedence).
+            if base_url and "http_options" not in client_kwargs:
+                client_kwargs["http_options"] = HttpOptions(base_url=base_url.rstrip("/"))
+            self._client = genai.Client(api_key=api_key, **client_kwargs)
         else:
-            # Legacy SDK uses global configuration
+            # Legacy SDK uses global configuration and cannot redirect its
+            # endpoint through a simple base_url, so surface that clearly.
+            if base_url or client_kwargs:
+                logger.warning(
+                    "[shrike-guard] base_url/client_kwargs are only supported by the "
+                    "google-genai SDK; the legacy google-generativeai SDK ignores them. "
+                    "Install google-genai for custom-endpoint support."
+                )
             if api_key:
                 genai_legacy.configure(api_key=api_key)
             self._client = None
@@ -101,7 +122,8 @@ class ShrikeGemini:
         self._scan_timeout = scan_timeout
         self._http = httpx.Client(timeout=scan_timeout)
 
-        # Note: All scanning is done via backend API (tier-based: free=L1-L4, paid=L1-L8)
+        # Note: Scan depth is set by the backend from the license tier
+        # (community = L1-L5 deterministic; Pro and above = full L1-L9).
         # No local scanning - backend has full regex patterns (~50+) and normalizers
 
         if not self._shrike_api_key:
@@ -168,8 +190,8 @@ class ShrikeGemini:
         """Scan content via backend API.
 
         Always calls backend - backend handles tier-based scanning:
-        - Free tier (no API key): L1-L4 (regex, unicode, encoding, token normalization)
-        - Paid tier: L1-L8 (full scan including LLM)
+        - Community tier (no API key): L1-L5 (regex, unicode, malformed, encoding, token/semantic)
+        - Pro tier and above: L1-L9 (adds visual, LLM semantic, response intel, session correlation)
         """
         text_content = self._extract_content(contents)
 

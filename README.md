@@ -1,7 +1,7 @@
 # Shrike Guard
 
 [![PyPI version](https://badge.fury.io/py/shrike-guard.svg)](https://badge.fury.io/py/shrike-guard)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **Shrike Guard** is a Python SDK for the [Shrike](https://shrikesecurity.com) platform — AI governance for every AI interaction. It wraps OpenAI, Anthropic (Claude), and Google Gemini clients to automatically evaluate all prompts against policy before they reach the LLM. Govern LangChain agents, RAG pipelines, FastAPI chatbots, and any Python AI application with the same 9-layer cognitive pipeline.
@@ -184,6 +184,47 @@ client = ShrikeOpenAI(
 )
 ```
 
+### Local and self-hosted LLMs
+
+Shrike governs the model you point it at — it does not have to be a hosted
+frontier API. Local runtimes like [Ollama](https://ollama.com),
+[vLLM](https://docs.vllm.ai), and LM Studio expose an OpenAI-compatible
+endpoint, so `ShrikeOpenAI` guards them by forwarding a `base_url`:
+
+```python
+from shrike_guard import ShrikeOpenAI
+
+# Ollama serving llama3 locally, governed by Shrike before every call
+client = ShrikeOpenAI(
+    api_key="ollama",                       # local servers ignore the value
+    base_url="http://localhost:11434/v1",   # your local/self-hosted endpoint
+    shrike_api_key="shrike-...",            # governance still runs server-side
+)
+
+response = client.chat.completions.create(
+    model="llama3",
+    messages=[{"role": "user", "content": "Summarize this ticket…"}],
+)
+```
+
+Any keyword argument other than `shrike_*` is passed straight through to the
+underlying provider client, so this also covers `ShrikeAnthropic(base_url=...)`
+for Anthropic-compatible gateways. For Gemini, point it at a compatible
+endpoint the same way (added in 4.0.5):
+
+```python
+from shrike_guard import ShrikeGemini
+
+client = ShrikeGemini(
+    api_key="…",
+    shrike_api_key="shrike-...",
+    base_url="https://your-gemini-gateway.example",  # google-genai SDK only
+)
+```
+
+The prompt still leaves your process to reach the Shrike backend for scanning;
+the *model call* stays on your local/self-hosted endpoint.
+
 ## SQL and File Scanning
 
 ```python
@@ -246,7 +287,7 @@ with ScanClient(api_key="shrike-...") as scanner:
 
 ## Compatibility
 
-- **Python**: 3.8+
+- **Python**: 3.10+
 - **LLM SDKs**:
   - OpenAI SDK `>=1.0.0`
   - Anthropic SDK `>=0.18.0` (optional: `pip install shrike-guard[anthropic]`)

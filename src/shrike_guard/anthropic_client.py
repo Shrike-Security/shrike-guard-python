@@ -77,7 +77,8 @@ class ShrikeAnthropic:
         self._scan_timeout = scan_timeout
         self._http = httpx.Client(timeout=scan_timeout)
 
-        # Note: All scanning is done via backend API (tier-based: free=L1-L4, paid=L1-L8)
+        # Note: Scan depth is set by the backend from the license tier
+        # (community = L1-L5 deterministic; Pro and above = full L1-L9).
         # No local scanning - backend has full regex patterns (~50+) and normalizers
 
         if not self._shrike_api_key:
@@ -115,8 +116,8 @@ class ShrikeAnthropic:
         """Scan user messages for security threats via backend API.
 
         Always calls backend - backend handles tier-based scanning:
-        - Free tier (no API key): L1-L4 (regex, unicode, encoding, token normalization)
-        - Paid tier: L1-L8 (full scan including LLM)
+        - Community tier (no API key): L1-L5 (regex, unicode, malformed, encoding, token/semantic)
+        - Pro tier and above: L1-L9 (adds visual, LLM semantic, response intel, session correlation)
         """
         user_content = self._extract_user_content(messages)
 
@@ -296,7 +297,8 @@ class ShrikeAsyncAnthropic:
         self._scan_timeout = scan_timeout
         self._http = httpx.AsyncClient(timeout=scan_timeout)
 
-        # Note: All scanning is done via backend API (tier-based: free=L1-L4, paid=L1-L8)
+        # Note: Scan depth is set by the backend from the license tier
+        # (community = L1-L5 deterministic; Pro and above = full L1-L9).
         # No local scanning - backend has full regex patterns (~50+) and normalizers
 
         if not self._shrike_api_key:
@@ -329,8 +331,8 @@ class ShrikeAsyncAnthropic:
         """Scan user messages for security threats via backend API.
 
         Always calls backend - backend handles tier-based scanning:
-        - Free tier (no API key): L1-L4 (regex, unicode, encoding, token normalization)
-        - Paid tier: L1-L8 (full scan including LLM)
+        - Community tier (no API key): L1-L5 (regex, unicode, malformed, encoding, token/semantic)
+        - Pro tier and above: L1-L9 (adds visual, LLM semantic, response intel, session correlation)
         """
         user_content = self._extract_user_content(messages)
 

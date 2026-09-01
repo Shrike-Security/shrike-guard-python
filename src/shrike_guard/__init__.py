@@ -46,7 +46,7 @@ Configuration:
     - fail_mode="open": Allow requests on scan failure (availability over enforcement)
     - scan_timeout: Timeout for scan requests (default: 10.0 seconds)
 
-For more information, see: https://docs.shrike.security/sdk/python
+For more information, see: https://shrikesecurity.com/docs/sdk/python
 """
 
 from .async_client import ShrikeAsyncOpenAI
