@@ -6,6 +6,8 @@
 
 **Shrike Guard** is a Python SDK for the [Shrike](https://shrikesecurity.com) platform — AI governance for every AI interaction. It wraps OpenAI, Anthropic (Claude), and Google Gemini clients to automatically evaluate all prompts against policy before they reach the LLM. Govern LangChain agents, RAG pipelines, FastAPI chatbots, and any Python AI application with the same 9-layer cognitive pipeline.
 
+It scans two different things. **Prompts and responses**, which is what a guardrail library normally means. And **agent actions** — the shell command, the SQL query, the web search, the retrieved document, the MCP tool definition — screened before they run, which is where an autonomous agent actually causes harm. See [Scanning agent actions](#scanning-agent-actions-shell-commands-sql-web-search-rag-mcp-tools).
+
 ## Features
 
 - **Drop-in replacement** for OpenAI, Anthropic, and Gemini clients
@@ -16,8 +18,10 @@
   - SQL injection
   - Path traversal
   - Malicious instructions
+- **Pre-execution scanning for agent actions**: shell commands, SQL, file writes, web searches, RAG context, agent-to-agent messages, agent cards, and MCP tool schemas
+- **Content provenance** (`content_origin`): every verdict says whether a human typed it, the model wrote it, the agent is about to do it, or it arrived from outside
 - **Fail-safe modes**: Defaults to fail-closed (Zero Trust posture); opt into fail-open explicitly when availability outranks enforcement
-- **Async support**: Works with both sync and async clients
+- **Async support**: Works with both sync and async clients, with identical scan surfaces
 - **Zero code changes**: Just replace your import
 
 ## What Shrike Detects
@@ -184,6 +188,47 @@ client = ShrikeOpenAI(
 )
 ```
 
+### Sessions: one per unit of work, not one per process
+
+Shrike correlates risk across a session. After a refusal, later actions in the
+same session are held until the session recovers. That is the multi-turn
+defence, and it means the session id has to mean one unit of work: one agent
+run, one conversation, one user's request.
+
+By default the SDK scans under one id for the whole process. That suits a CLI,
+a worker, or a single agent. It does not suit a server that scans on behalf of
+many end users, because every user then shares one risk score, and one user's
+refusal counts against the next user's action.
+
+Build one client at startup and derive a per-request view from it. The view
+shares the connection pool, so it costs nothing to make one per request:
+
+```python
+from shrike_guard.scanner import ScanClient
+
+guard = ScanClient(api_key="shrike-...")          # once, at startup
+
+def handle(request):                               # per request
+    scoped = guard.for_session(request.session_id)
+    verdict = scoped.scan_command(request.command)
+    if verdict["refuse_tier"] != "allow":
+        ...
+```
+
+Or pin the identity at construction when one client serves one unit of work:
+
+```python
+client = ScanClient(api_key="shrike-...", session_id="job-42", agent_id="ingest")
+```
+
+`agent_id` is separate on purpose: it names *which agent* a scope is enforced
+against and who an incident is attributed to. Set it when one process drives
+several distinct agents.
+
+The SDK warns once per process when it is scanning under the shared default.
+Set `SHRIKE_SUPPRESS_SESSION_WARNING=1` to silence it once you have decided
+the default is what you want.
+
 ### Local and self-hosted LLMs
 
 Shrike governs the model you point it at — it does not have to be a hosted
@@ -225,23 +270,130 @@ client = ShrikeGemini(
 The prompt still leaves your process to reach the Shrike backend for scanning;
 the *model call* stays on your local/self-hosted endpoint.
 
-## SQL and File Scanning
+## Scanning agent actions (shell commands, SQL, web search, RAG, MCP tools)
+
+Scanning the prompt protects the model. It does not protect the shell. An agent
+that was never told anything malicious can still be talked into running
+`curl … | sh` by a poisoned README, and the prompt scan has no view of that.
+
+`ScanClient` exposes a method per action channel. Call the one that matches
+what the agent is about to do, before it does it:
+
+| Channel | Method | Screens for |
+|---|---|---|
+| Shell command | `scan_command(command, cwd=None)` | destructive commands, data exfiltration, credential dumps, embedded SQL injection |
+| SQL query | `scan_sql(query, database=None, allow_destructive=False)` | SQL injection, unauthorized destructive statements |
+| File path | `scan_file(path)` | path traversal, writes outside the working tree |
+| File content | `scan_file(path, content)` | secrets, credentials, PII before they land on disk |
+| Web search | `scan_web_search(query)` | searches that acquire attack tooling, credentials, or evasion tradecraft |
+| RAG context | `scan_rag_context(chunks, query=None)` | indirect prompt injection in retrieved documents |
+| Agent message | `scan_a2a_message(message)` | instructions smuggled between agents |
+| Agent card | `scan_agent_card(agent_card, verify_signature=False)` | capability misrepresentation in A2A discovery |
+| MCP tool schema | `scan_mcp_schema(name, description, input_schema=None)` | tool poisoning in `tools/list` responses |
 
 ```python
 from shrike_guard import ScanClient
 
 with ScanClient(api_key="shrike-...") as scanner:
-    # Scan SQL queries for injection attacks
-    sql_result = scanner.scan_sql("SELECT * FROM users WHERE id = 1")
-    if not sql_result["safe"]:
-        print(f"SQL threat: {sql_result['reason']}")
+    # Before shelling out
+    cmd = scanner.scan_command('psql -c "SELECT * FROM users"', cwd="/srv/app")
+    if not cmd["safe"]:
+        raise RuntimeError(f"Refused: {cmd['reason']}")
 
-    # Scan file paths for path traversal
-    file_result = scanner.scan_file("/app/data/output.csv")
+    # Before querying
+    sql = scanner.scan_sql("SELECT * FROM users WHERE id = %s", database="postgres")
 
-    # Scan file content for secrets/PII
-    content_result = scanner.scan_file("/tmp/config.py", "api_key = 'sk-...'")
+    # Before writing
+    write = scanner.scan_file("/tmp/config.py", "api_key = 'sk-...'")
+
+    # Before searching the web
+    search = scanner.scan_web_search("sql injection prevention owasp")
 ```
+
+A shell command is not one thing. `scan_command` decomposes it, so SQL passed to
+`psql -c`, `mysql -e`, or a heredoc is scanned as SQL rather than as an opaque
+string of shell text.
+
+Every method above exists on `AsyncScanClient` with the same signature:
+
+```python
+from shrike_guard import AsyncScanClient
+
+async with AsyncScanClient(api_key="shrike-...") as scanner:
+    verdict = await scanner.scan_command("rm -rf /var/data")
+```
+
+### Indirect prompt injection in RAG pipelines
+
+Retrieved chunks are text somebody else wrote. They are the standard carrier for
+indirect prompt injection: the user asks nothing unusual, the document tells the
+model what to do, and the model complies. Scan on the way in, not after the
+model has acted:
+
+```python
+chunks = vector_store.similarity_search(user_query, k=5)
+
+verdict = scanner.scan_rag_context(
+    [c.page_content for c in chunks],
+    query=user_query,
+)
+
+if not verdict["safe"]:
+    # The retrieved context is hostile, not the user's question.
+    logger.warning("Poisoned context: %s", verdict["reason"])
+```
+
+### MCP tool poisoning
+
+An MCP tool description is read by the model as guidance. A hostile server can
+put instructions in the `description` field of a tool that never executes, and
+the agent will act on them at registration time. Screen every entry of a
+`tools/list` response from a server you do not control:
+
+```python
+for tool in (await mcp_client.list_tools()).tools:
+    verdict = scanner.scan_mcp_schema(
+        tool.name,
+        tool.description or "",
+        tool.inputSchema,
+    )
+    if not verdict["safe"]:
+        logger.warning("Not registering %s: %s", tool.name, verdict["reason"])
+        continue
+    register(tool)
+```
+
+Screening happens once per tool at registration, not on every call.
+
+## Who is answerable: `content_origin`
+
+Every verdict carries `content_origin`, which says where the scanned content
+came from. It answers the question a verdict alone cannot: *was that my prompt,
+or the agent acting on its own?*
+
+| Value | Meaning |
+|---|---|
+| `human_prompt` | the operator typed it |
+| `agent_output` | the model generated it |
+| `agent_action` | the agent is about to do it (every act-plane channel) |
+| `third_party` | it arrived from outside: a tool result, a retrieved document, a peer agent |
+
+```python
+verdict = scanner.scan_rag_context(chunks)
+
+if not verdict["safe"]:
+    if verdict.get("content_origin") == "human_prompt":
+        show_user(f"Your request was blocked: {verdict['reason']}")
+    else:
+        # The agent poisoned its own context. Telling the user "your request
+        # was blocked" would be both wrong and unhelpful.
+        logger.warning("agent-side refusal: %s", verdict["reason"])
+        retry_with_clean_context()
+```
+
+Unknown content types resolve to `agent_action`, never to `human_prompt`:
+attributing an unattributable action to the operator is the one error that is
+never safe to make by default.
 
 ## Error Handling
 
@@ -306,6 +458,8 @@ export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export SHRIKE_API_KEY="shrike-..."
 export SHRIKE_ENDPOINT="https://your-shrike-instance.com"
+export SHRIKE_AGENT_ID="ingest"                 # names this process's agent; see Sessions
+export SHRIKE_SUPPRESS_SESSION_WARNING=1        # once you have decided the shared session is right
 ```
 
 ## Scope and Limitations
@@ -317,13 +471,23 @@ export SHRIKE_ENDPOINT="https://your-shrike-instance.com"
 | Multi-modal text content | Non-chat API calls |
 | SQL queries | |
 | File paths and content | |
+| Shell commands | |
+| Web search queries | |
+| Retrieved RAG context | |
+| Agent-to-agent messages and agent cards | |
+| MCP tool schemas | |
 
-### Why Input-Only Scanning?
+### Why Pre-Execution Scanning?
 
-Shrike Guard focuses on **pre-flight protection** — blocking malicious prompts BEFORE they reach the LLM. This:
+Shrike Guard focuses on **pre-flight protection** — evaluating a prompt before it
+reaches the LLM, and an action before it runs. This:
 - Prevents prompt injection attacks at the source
 - Has zero latency impact on LLM responses
-- Catches the vast majority of threats at the input layer
+- Puts the decision point before the side effect, where refusing still costs nothing
+
+An action already taken cannot be un-taken by detecting it afterwards. That is the
+distinction between this and after-the-fact monitoring: the verdict arrives while
+refusing is still free.
 
 ## Other Integration Surfaces
 
@@ -340,23 +504,42 @@ Shrike Guard is one of several ways to integrate with the Shrike platform:
 
 | Scenario | How Shrike Guard Helps |
 |---|---|
-| **LangChain / CrewAI agents** | Wrap your LLM client. Every agent action scanned before execution. |
-| **RAG pipelines** | Scan retrieved context + user queries for PII leakage and injection. |
+| **Coding agents that shell out** | `scan_command` before every `subprocess` call. Destructive commands, exfiltration, and SQL smuggled through `psql -c` are caught before the process starts. |
+| **LangChain / LangGraph / CrewAI agents** | Wrap your LLM client for prompts, call the act-plane methods before tool execution. |
+| **RAG pipelines** | `scan_rag_context` on retrieved chunks for indirect prompt injection, plus PII leakage on the query. |
+| **MCP clients** | `scan_mcp_schema` on every `tools/list` entry from a server you do not control, to catch tool poisoning at registration. |
+| **Multi-agent systems** | `scan_a2a_message` and `scan_agent_card` for instructions smuggled between agents. |
 | **FastAPI chatbot** | Middleware-style integration. Scan every request before it hits the model. |
 | **Internal AI tools** | Protect Slack bots, email assistants, and internal AI applications. |
 
-## Alternatives
+## How This Differs From a Prompt Scanner
 
-Looking for a Python AI security SDK? Here's how Shrike Guard compares:
+If you are evaluating Python AI security SDKs, this is the distinction worth
+testing against your own workload.
 
-| Feature | Shrike Guard | Lakera | Prompt Armor |
-|---|---|---|---|
-| Drop-in OpenAI/Anthropic/Gemini wrapper | Yes | No | No |
-| 9-layer cognitive pipeline | Yes | Limited | Limited |
-| PII detection + redaction | Yes | Partial | No |
-| Async support | Yes | Partial | No |
-| Free tier (no API key) | Yes | No | No |
-| Open source client | Yes (Apache 2.0) | No | No |
+Most guardrail libraries answer one question: **is this text hostile?** They read
+the prompt, and sometimes the response. That is necessary, and Shrike Guard does
+it through a 9-layer cascade with PII redaction and multi-turn session
+correlation.
+
+But an autonomous agent does not cause harm by saying something. It causes harm
+by *doing* something: running a command, writing a file, querying a database,
+calling a tool. Shrike Guard scans those too, before they execute:
+
+- **A verdict per action channel** — shell commands, SQL, file writes, web
+  searches, RAG context, agent-to-agent messages, agent cards, MCP tool schemas.
+  See [Scanning agent actions](#scanning-agent-actions-shell-commands-sql-web-search-rag-mcp-tools).
+- **Pre-execution, not after the fact.** The verdict arrives while refusing is
+  still free. An action already taken cannot be un-taken by detecting it.
+- **Provenance on every verdict** (`content_origin`) — whether a human typed it,
+  the model wrote it, the agent is about to do it, or it arrived from outside.
+- **A governance contract, not just a boolean** — `refuse_tier`
+  (allow / warn / require_approval / block), a `recovery` block telling the agent
+  how to proceed legitimately, and `session_state`. Present on safe verdicts too.
+- **Drop-in wrappers** for OpenAI, Anthropic, and Gemini, so the prompt-scanning
+  half needs no code changes.
+- **Identical sync and async surfaces**, enforced by a test rather than by habit.
+- **Free tier with no API key**, and an Apache 2.0 client you can read.
 
 ## License
 

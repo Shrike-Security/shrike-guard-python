@@ -52,6 +52,40 @@ class TestDeclareScopeSync:
             assert result["scope_id"] == "sc_1"
         client.close()
 
+    def test_refresh_body_carries_only_agent_id_and_duration(self) -> None:
+        """A refresh omits allowed_tools and everything else so the backend
+        inherits the scope on file; the response carries the renewal window."""
+        client = self._fixture_client()
+        with mock.patch.object(
+            client._http,
+            "post",
+            return_value=_mock_response(
+                {"scope_id": "sc_1", "renewable_until": "2026-09-06T12:00:00Z", "ceiling_reached": False}
+            ),
+        ) as post:
+            result = client.declare_scope(agent_id="recon_agent", max_duration_seconds=7200)
+            assert post.call_args.kwargs["json"] == {
+                "agent_id": "recon_agent",
+                "max_duration_seconds": 7200,
+            }
+            assert result["renewable_until"] == "2026-09-06T12:00:00Z"
+            assert result["ceiling_reached"] is False
+        client.close()
+
+    def test_renewable_seconds_forwarded_on_first_declaration(self) -> None:
+        client = self._fixture_client()
+        with mock.patch.object(
+            client._http, "post", return_value=_mock_response({"scope_id": "sc_1"})
+        ) as post:
+            client.declare_scope(
+                agent_id="recon_agent",
+                allowed_tools=["command"],
+                max_duration_seconds=7200,
+                renewable_seconds=86400,
+            )
+            assert post.call_args.kwargs["json"]["renewable_seconds"] == 86400
+        client.close()
+
     def test_all_optional_fields_serialized_when_set(self) -> None:
         """Every optional field flows to the wire when the caller sets it."""
         client = self._fixture_client()

@@ -1,0 +1,111 @@
+{
+  "session_identity": {
+    "required_context_keys": ["session_id", "agent_id", "source_application"],
+    "applies_to": "every scan request, general and specialized alike",
+    "why": [
+      "session_id is the key multi-turn correlation groups a caller's turns by.",
+      "Without it the stateful layer has nothing to correlate.",
+      "agent_id is what scope enforcement attributes an action to. Without it,",
+      "a declared scope cannot be matched to the agent performing the action.",
+      "source_application identifies the SDK for support and telemetry.",
+      "",
+      "An SDK omitting these does not fail loudly. It silently receives a",
+      "weaker product than the one the customer believes they installed."
+    ],
+    "source_application_by_sdk": {
+      "typescript": "shrike-guard-ts",
+      "python": "shrike-guard-py",
+      "go": "shrike-guard-go"
+    },
+    "agent_id_env_override": "SHRIKE_AGENT_ID"
+  },
+
+  "auth": {
+    "accepted_headers": ["authorization", "x-shrike-api-key"],
+    "forbidden_headers": ["x-api-key"],
+    "why": [
+      "The backend reads the API key from Authorization: Bearer or",
+      "X-Shrike-API-Key only. A request that carries the key in X-API-Key has",
+      "no recognized credential, resolves to the anonymous tier, and receives",
+      "anonymous-tier scanning with no error to say so."
+    ]
+  },
+
+  "general_endpoint": "/api/scan/enforce",
+
+  "general_scan": {
+    "required_body_keys": ["prompt", "scan_type", "context"],
+    "scan_type": "full",
+    "conversation_history_key": "conversation_history",
+    "why": [
+      "The conversation history goes in conversation_history, NOT in context.",
+      "context is an object carrying the session identity. A string context is",
+      "accepted on the wire but carries no session_id or agent_id, so multi-turn",
+      "correlation has no key to group turns by and scope enforcement has no",
+      "agent to attribute the scan to. Nothing reports the loss."
+    ]
+  },
+
+  "specialized_endpoint": "/api/scan/enforce/specialized",
+
+  "channels": {
+    "command": {
+      "content_type": "command",
+      "optional_context_keys": ["cwd"],
+      "sample_content": "ls -la"
+    },
+    "sql": {
+      "content_type": "sql",
+      "optional_context_keys": ["database", "allow_destructive"],
+      "sample_content": "SELECT 1"
+    },
+    "file_path": {
+      "content_type": "file_path",
+      "optional_context_keys": [],
+      "sample_content": "/etc/passwd",
+      "note": "ScanFile with no content argument resolves here."
+    },
+    "file_content": {
+      "content_type": "file_content",
+      "optional_context_keys": ["file_content"],
+      "sample_content": "/tmp/config.py",
+      "note": "ScanFile with a content argument resolves here. One method, two channels, decided by an argument: getting it backwards scans a file body against path-traversal rules."
+    },
+    "web_search": {
+      "content_type": "web_search",
+      "optional_context_keys": [],
+      "sample_content": "owasp"
+    },
+    "rag_context": {
+      "content_type": "rag_context",
+      "optional_context_keys": ["query"],
+      "sample_content": "chunk",
+      "multi_chunk_encoding": "json_array",
+      "note": "Multiple chunks serialize as a JSON array so the backend can split them apart again. A naive join merges two documents and loses the boundary an injection usually sits on."
+    },
+    "a2a_message": {
+      "content_type": "a2a_message",
+      "optional_context_keys": ["sender_agent_id", "receiver_agent_id", "task_id", "role"],
+      "sample_content": "hello"
+    },
+    "agent_card": {
+      "content_type": "agent_card",
+      "optional_context_keys": ["verify_signature"],
+      "sample_content": "{}"
+    }
+  },
+
+  "non_specialized": {
+    "mcp_schema": {
+      "endpoint": "/api/scan/mcp_schema",
+      "required_body_keys": ["name", "description"],
+      "optional_body_keys": ["input_schema"],
+      "must_not_contain": ["content_type"],
+      "why": [
+        "Not a specialized content type: its own route and its own detector.",
+        "Routing it through the specialized endpoint would scan the tool",
+        "description as opaque text and miss tool poisoning entirely."
+      ]
+    }
+  }
+}

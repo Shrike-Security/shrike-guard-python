@@ -254,6 +254,15 @@ _PRESERVED_GOVERNANCE_FIELDS = (
     "recovery",
     "session_state",
     "content_type",
+    # Provenance: human_prompt / agent_output / agent_action / third_party.
+    # This is an OUTCOME field, not detection attribution — it says who is
+    # answerable for the scanned content, which the caller needs to decide who
+    # a refusal is even addressed to. It shipped on the backend in 2cfaa5f and
+    # was silently dropped here, because this list is an allow-list and nobody
+    # added it: a new backend field reaches no caller until it appears in this
+    # tuple. Telling a user "your request was blocked" when the agent poisoned
+    # its own context is both wrong and unhelpful.
+    "content_origin",
     "approval_info",
     "client_session_rotation",
 )

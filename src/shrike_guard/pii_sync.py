@@ -45,7 +45,7 @@ def _fallback_prefix_for(threat_type: str) -> str:
 
     Retired ``_PREFIX_MAP`` in favor of this + backend-shipped prefixes
     because the hardcoded allowlist silently dropped any new pattern the
-    backend added (see 2026-07-01 U1 IP-redaction miss). Now no
+    backend added. Now no
     threat_type ever disappears and adding a new backend pattern requires
     zero SDK changes.
     """

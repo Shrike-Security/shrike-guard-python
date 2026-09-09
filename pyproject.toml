@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "shrike-guard"
-version = "4.0.5"
+version = "4.1.0"
 description = "Shrike SDK for AI agent action governance — drop-in wrapper for OpenAI, Anthropic, and Gemini that governs every tool call, prompt, and response server-side. Allow / approve / block. Free tier available."
 authors = ["Shrike Security <security@shrikesecurity.com>"]
 readme = "README.md"

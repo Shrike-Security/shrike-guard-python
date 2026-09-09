@@ -1,14 +1,16 @@
 """Cross-language contract-symmetry parity test.
 
-Loads the shared fixture at platform/testdata/contract-symmetry/ and asserts
+Loads the contract-symmetry fixture vendored under tests/fixtures/ and asserts
 that Python SDK's sanitize_scan_response preserves every governance field
 declared as invariant. The identical fixture is consumed by the TypeScript
 SDK and MCP responseFormatter test suites — if any of the three drifts,
-that language's CI job fails.
+that language's CI job fails. The vendored copy is byte-identical to the
+canonical fixture shared by every consumer; the last test in this module
+checks that whenever the canonical copy is reachable.
 
-See platform/testdata/contract-symmetry/README.md for the design rationale
-and platform/CLAUDE.md § Contract symmetry for the shipped principle
-this pins.
+Pins the contract-symmetry principle: every scan response carries the same
+governance fields (safe, refuse_tier, recovery, session_state) whether the
+verdict is safe or refused.
 """
 
 import json
@@ -21,12 +23,15 @@ from shrike_guard.sanitizer import sanitize_scan_response
 
 
 # ---------------------------------------------------------------------------
-# Fixture loading — reach up from platform/sdks/python/tests/ to platform/
+# Fixture loading
 # ---------------------------------------------------------------------------
 
 _HERE = Path(__file__).resolve().parent
-# platform/sdks/python/tests → platform/
-_FIXTURE_DIR = _HERE.parents[2] / "testdata" / "contract-symmetry"
+# The vendored copy ships with the package so the suite runs from any checkout.
+_FIXTURE_DIR = _HERE / "fixtures" / "contract-symmetry"
+# The canonical copy is shared with the other SDKs and is only reachable from
+# the monorepo; when present, the vendored copy must match it byte for byte.
+_CANONICAL_DIR = _HERE.parents[2] / "testdata" / "contract-symmetry"
 
 
 def _load(name: str) -> Dict[str, Any]:
@@ -222,3 +227,30 @@ def test_action_field_preserved_across_all_states(
         assert sanitized.get("action") == raw_action, (
             f"[{case_name}] action `{raw_action}` was stripped or altered"
         )
+
+
+# ---------------------------------------------------------------------------
+# The vendored fixture must match the canonical copy
+# ---------------------------------------------------------------------------
+
+
+def test_vendored_fixture_is_present() -> None:
+    """The suite reads the vendored copy, so the package must ship it."""
+    assert sorted(p.name for p in _FIXTURE_DIR.glob("*.json")), (
+        "tests/fixtures/contract-symmetry/ has no fixture files"
+    )
+
+
+@pytest.mark.skipif(
+    not _CANONICAL_DIR.is_dir(),
+    reason="canonical fixture directory not reachable from this checkout",
+)
+@pytest.mark.parametrize("name", sorted(p.name for p in _FIXTURE_DIR.glob("*.json")))
+def test_vendored_fixture_matches_canonical(name: str) -> None:
+    """The copy under tests/fixtures/ exists so the suite runs from a standalone
+    checkout. It is a copy, not a fork: whenever the canonical fixture is
+    reachable, every vendored file must match it byte for byte."""
+    assert (_FIXTURE_DIR / name).read_bytes() == (_CANONICAL_DIR / name).read_bytes(), (
+        f"{name}: vendored copy differs from the canonical fixture; "
+        "copy the canonical file over it"
+    )

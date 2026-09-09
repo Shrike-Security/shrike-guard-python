@@ -1,9 +1,7 @@
 """Tests for shrike_guard.formatters.
 
-Verifies the canonical block-feedback rendering shape used by the
-self-consultation stack's layer 4 (see RFC 2026-07-04 §4.7). The tests
-pin the current shape AND verify graceful upgrade when the recovery block lands
-the `recovery` block.
+Verifies the canonical block-feedback rendering shape. The tests pin the
+current shape and verify graceful handling of the `recovery` block.
 """
 
 from shrike_guard.formatters import format_block_feedback
@@ -193,7 +191,9 @@ def test_format_block_feedback_batch2d_wire_shape_session_locked():
         "accumulated risk from prior turns that cannot be scanned out; "
         "a fresh session_id is the self-service recovery path. "
         "reset_session is administratively restricted at the block "
-        "threshold."
+        "threshold, except under a live declared scope: an agent may "
+        "release its own session up to three times per renewal window, "
+        "and every release is audited."
     )
     verdict = {
         "safe": False,
@@ -216,7 +216,7 @@ def test_format_block_feedback_batch2d_wire_shape_session_locked():
                 "scan_response",
                 "session_status",
             ],
-            # Q1 session_locked short-circuit does NOT populate
+            # The session_locked short-circuit does NOT populate
             # patterns_triggered — the block fires on accumulated state
             # not a per-turn correlator report. session_patterns on
             # session_state carries the whole-session accumulator instead.

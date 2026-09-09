@@ -258,7 +258,7 @@ class TestEndpointConstruction:
 
 
 class TestBackendOwnedPrefixContract:
-    """2026-07-02 U1 regression: the SDK's _PREFIX_MAP allowlist silently
+    """Regression guard: the SDK's _PREFIX_MAP allowlist once silently
     dropped any backend PII pattern whose threat_type wasn't in the
     hardcoded list. A newly-added ``pii_ip_address`` recognizer never
     redacted client-side even though the backend detected it. Same bug

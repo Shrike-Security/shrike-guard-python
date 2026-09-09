@@ -13,9 +13,9 @@ Why chunk client-side:
     3. Bidirectional cost win: fewer tokens billed to the customer, fewer
        billed to us.
 
-Known limit (post-launch fix): each chunk carries the same session ID, so
-L9 turn count inflates by chunk-count. Fix is a backend ``chunk_group``
-field that collapses N chunk-scans into one L9 turn.
+Known limit: each chunk carries the same session ID, so the session turn
+count grows by the number of chunks. A backend ``chunk_group`` field that
+collapses N chunk-scans into one turn is the planned resolution.
 
 Mirrors platform/sdks/typescript/src/chunker.ts — keep the two SDKs
 aligned when either shape changes.
