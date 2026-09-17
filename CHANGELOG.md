@@ -1,5 +1,80 @@
 # Changelog
 
+## [4.2.0] - 2026-09-17
+
+### Added
+- **An unmapped tool can still be judged by its name.** A tool with no
+  mapping has no readable surface, so the content plane has nothing to say
+  about it. The authorization plane still does: the operator's declared scope
+  judges a tool by NAME, which is the one thing every tool call has.
+  `on_unmapped="authorize"` sends the tool's name (and nothing else) to the
+  backend, so a tool outside the allowlist is refused even though nothing
+  read what it was carrying, and an expired or exhausted scope holds it. The
+  permit is narrower than a mapped tool's and the record says so: the
+  decision's surface is `authorization`, never a scanned surface. A client
+  too old to ask fails according to `fail_mode` rather than assuming.
+  `ScanClient.authorize_tool` is the call underneath, on both the sync and
+  async clients.
+- **Observe-plane scans say so.** `ScanClient.scan` takes `plane=`, and
+  `observe_prompt` sends `plane="observe"`. A verdict on a prompt nobody is
+  gated on is advice: it is recorded and returned, and the model still reads
+  the note, but it is no longer filed as an action that was stopped.
+
+- **Framework starters over one core.** `shrike_guard.govern` is the
+  framework-free core of a governed agent: a tool mapping table
+  (`ToolMapping`, `map_tool`, `exempt`), `evaluate` (every scan a tool call
+  needs, stopping at the first refusal, into one `Outcome`: allow, warn, hold
+  or deny, with the message written for the model), `observe_prompt` (never
+  blocks), `request_scope` (the backend decides; a widening is refused unless
+  an operator grants it), and the record (`decisions`, `on_decision`). Each
+  starter is a thin translation of one framework's hooks:
+  - `shrike_guard.claude_agent` (Claude Agent SDK): `PreToolUse` and
+    `UserPromptSubmit` hooks, an in-process MCP tool. Ships mappings for the
+    SDK's built-in tools. `pip install shrike-guard[claude-agent]`.
+  - `shrike_guard.openai_agents` (OpenAI Agents SDK): a tool input guardrail
+    attached to every function tool (a refused call is answered with
+    `reject_content`, so the model reads the reason as the tool's output), a
+    non-tripping input guardrail for the observe plane, and `request_scope`
+    as a function tool. `pip install shrike-guard[openai-agents]`.
+  - `shrike_guard.google_adk` (Google ADK): `before_tool_callback` (a refused
+    call returns the reason as the tool's response), `before_model_callback`
+    (a finding is appended to the request's instructions), and
+    `request_scope` as a `FunctionTool`. `pip install shrike-guard[google-adk]`.
+  - `shrike_guard.langgraph_agent` (LangChain `create_agent` and LangGraph):
+    an agent middleware whose `wrap_tool_call` answers a refused call with a
+    `ToolMessage`, or `govern_tools` for a hand-built `ToolNode`, and
+    `request_scope` as a LangChain tool. `pip install shrike-guard[langgraph]`.
+  - `shrike_guard.crewai_agent` (CrewAI): `govern_tools` wraps each tool so
+    the reason reaches the model, `install` registers a global
+    `before_tool_call` backstop and a `before_llm_call` observe hook, and
+    `request_scope` as a CrewAI tool. `pip install shrike-guard[crewai]`.
+  - `pip install shrike-guard[frameworks]` installs every framework.
+- **Tool mappings.** A tool is a surface (`command`, `file`, `file_path`,
+  `sql`, `web_search`, `rag_context`, `a2a_message`, `agent_card`, or
+  `none`) and the argument that carries its payload. A tool with no mapping
+  is refused with a message that says how to map it (`on_unmapped="deny"`),
+  or allowed and recorded (`"allow"`), or has its arguments scanned as text
+  (`"scan"`), or judged by name alone (`"authorize"`, see below). The Claude
+  Agent SDK starter defaults to `"authorize"`, and its hook now sees every
+  tool the agent can call rather than only the mapped ones, because a tool
+  with no reader is exactly the one whose authorization nobody has checked.
+  Pass an explicit tool list to `hooks_for` to narrow the matcher.
+- **A conformance suite.** `tests/test_frameworks.py` drives every starter
+  through the same table (allow, warn, block, hold, backend down, unmapped,
+  a refused widening); each starter must answer it the same way.
+
+### Changed
+- **The CrewAI extra now requires crewai >= 1.15.** The starter wires
+  `crewai.hooks` and `crewai.hooks.dispatch.HookAborted`, which 1.6.x does not
+  carry. The floor said `>=1.0.0`, so a resolver was free to pick a release the
+  starter cannot drive.
+
+### Fixed
+- **A too-old CrewAI no longer reports itself as missing.** The import guard
+  answered "crewai is not installed" whatever the reason, sending anyone on an
+  older release to reinstall a package they already had. It now names the
+  installed version and says to upgrade.
+
 ## [4.1.0] - 2026-09-09
 
 ### Added

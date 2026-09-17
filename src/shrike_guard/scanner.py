@@ -233,12 +233,20 @@ class ScanClient:
             extra, session_id=self._session_id, agent_id=self._agent_id
         )
 
-    def scan(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
+    def scan(
+        self, prompt: str, context: Optional[str] = None, *, plane: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Scan a prompt for security threats.
 
         Args:
             prompt: The user prompt to scan.
             context: Optional conversation context for better analysis.
+            plane: Which side of the enforcement boundary this scan is on.
+                ``"observe"`` for a person's prompt or a model's reply, which
+                nobody is gated on; ``"act"`` (the default when omitted) for
+                something about to execute. An observe-plane verdict is
+                advice: it is recorded and returned, but it never becomes an
+                incident, because nothing was stopped.
 
         Returns:
             Scan result dictionary with 'safe' boolean and additional details.
@@ -256,11 +264,13 @@ class ScanClient:
         # is unchanged; above it we split on natural boundaries, scan each
         # chunk sequentially, and stop on the first block verdict.
         if len(prompt) > AUTO_CHUNK_THRESHOLD:
-            return self._scan_chunked(prompt, context)
+            return self._scan_chunked(prompt, context, plane)
 
-        return self._scan_single(prompt, context)
+        return self._scan_single(prompt, context, plane)
 
-    def _scan_single(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
+    def _scan_single(
+        self, prompt: str, context: Optional[str] = None, plane: Optional[str] = None
+    ) -> Dict[str, Any]:
         # `context` is the CONVERSATION history, and it belongs in
         # conversation_history — not in `context`, which is where the backend
         # reads session identity from.
@@ -273,7 +283,7 @@ class ScanClient:
         payload: Dict[str, Any] = {
             "prompt": prompt,
             "scan_type": "full",
-            "context": self._session_context(),
+            "context": self._session_context({"plane": plane} if plane else None),
         }
         if context:
             payload["conversation_history"] = context
@@ -287,7 +297,9 @@ class ScanClient:
         response.raise_for_status()
         return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
-    def _scan_chunked(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
+    def _scan_chunked(
+        self, prompt: str, context: Optional[str] = None, plane: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Sequential fail-fast chunked scan. See chunker.py header for design.
 
         Known limit: the same session id rides every chunk, so the session
@@ -296,7 +308,7 @@ class ScanClient:
         chunks = chunk_content(prompt)
         results: List[Dict[str, Any]] = []
         for chunk in chunks:
-            chunk_result = self._scan_single(chunk, context)
+            chunk_result = self._scan_single(chunk, context, plane)
             results.append(chunk_result)
             action = chunk_result.get("action") or chunk_result.get("refuse_tier")
             if action == "block":
@@ -405,6 +417,35 @@ class ScanClient:
 
         response = self._http.post(
             f"{self._endpoint}/api/scan/enforce/specialized",
+            json=payload,
+            headers=get_scan_headers(self._api_key),
+        )
+        _check_rate_limited(response)
+        response.raise_for_status()
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
+
+    def authorize_tool(self, tool_name: str) -> Dict[str, Any]:
+        """Ask whether this agent may call a tool, without sending its arguments.
+
+        For a tool this SDK has no reader for. The operator's declared scope
+        judges a tool by NAME, so a tool nobody can parse is still refused
+        when it is not on the allowlist, and still held when the scope has
+        expired or run out of actions.
+
+        This answers one question. A permit says the agent was allowed to make
+        the call; it never says the arguments were inspected, because none
+        were sent. Where a tool maps to one of the scanned surfaces, scan that
+        surface instead and get both answers.
+
+        Args:
+            tool_name: The tool about to run.
+
+        Returns:
+            Scan result dict; check ``safe`` and ``refuse_tier`` before running.
+        """
+        payload = {"tool_name": tool_name, "context": self._session_context()}
+        response =  self._http.post(
+            f"{self._endpoint}/api/scan/authorize",
             json=payload,
             headers=get_scan_headers(self._api_key),
         )
@@ -682,12 +723,20 @@ class AsyncScanClient:
             extra, session_id=self._session_id, agent_id=self._agent_id
         )
 
-    async def scan(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
+    async def scan(
+        self, prompt: str, context: Optional[str] = None, *, plane: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Scan a prompt for security threats.
 
         Args:
             prompt: The user prompt to scan.
             context: Optional conversation context for better analysis.
+            plane: Which side of the enforcement boundary this scan is on.
+                ``"observe"`` for a person's prompt or a model's reply, which
+                nobody is gated on; ``"act"`` (the default when omitted) for
+                something about to execute. An observe-plane verdict is
+                advice: it is recorded and returned, but it never becomes an
+                incident, because nothing was stopped.
 
         Returns:
             Scan result dictionary with 'safe' boolean and additional details.
@@ -702,11 +751,13 @@ class AsyncScanClient:
             return size_result
 
         if len(prompt) > AUTO_CHUNK_THRESHOLD:
-            return await self._scan_chunked(prompt, context)
+            return await self._scan_chunked(prompt, context, plane)
 
-        return await self._scan_single(prompt, context)
+        return await self._scan_single(prompt, context, plane)
 
-    async def _scan_single(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
+    async def _scan_single(
+        self, prompt: str, context: Optional[str] = None, plane: Optional[str] = None
+    ) -> Dict[str, Any]:
         # `context` is the CONVERSATION history, and it belongs in
         # conversation_history — not in `context`, which is where the backend
         # reads session identity from.
@@ -719,7 +770,7 @@ class AsyncScanClient:
         payload: Dict[str, Any] = {
             "prompt": prompt,
             "scan_type": "full",
-            "context": self._session_context(),
+            "context": self._session_context({"plane": plane} if plane else None),
         }
         if context:
             payload["conversation_history"] = context
@@ -733,12 +784,14 @@ class AsyncScanClient:
         response.raise_for_status()
         return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
-    async def _scan_chunked(self, prompt: str, context: Optional[str] = None) -> Dict[str, Any]:
+    async def _scan_chunked(
+        self, prompt: str, context: Optional[str] = None, plane: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Sequential fail-fast chunked scan — async twin of ScanClient._scan_chunked."""
         chunks = chunk_content(prompt)
         results: List[Dict[str, Any]] = []
         for chunk in chunks:
-            chunk_result = await self._scan_single(chunk, context)
+            chunk_result = await self._scan_single(chunk, context, plane)
             results.append(chunk_result)
             action = chunk_result.get("action") or chunk_result.get("refuse_tier")
             if action == "block":
@@ -841,6 +894,35 @@ class AsyncScanClient:
 
         response = await self._http.post(
             f"{self._endpoint}/api/scan/enforce/specialized",
+            json=payload,
+            headers=get_scan_headers(self._api_key),
+        )
+        _check_rate_limited(response)
+        response.raise_for_status()
+        return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
+
+    async def authorize_tool(self, tool_name: str) -> Dict[str, Any]:
+        """Ask whether this agent may call a tool, without sending its arguments.
+
+        For a tool this SDK has no reader for. The operator's declared scope
+        judges a tool by NAME, so a tool nobody can parse is still refused
+        when it is not on the allowlist, and still held when the scope has
+        expired or run out of actions.
+
+        This answers one question. A permit says the agent was allowed to make
+        the call; it never says the arguments were inspected, because none
+        were sent. Where a tool maps to one of the scanned surfaces, scan that
+        surface instead and get both answers.
+
+        Args:
+            tool_name: The tool about to run.
+
+        Returns:
+            Scan result dict; check ``safe`` and ``refuse_tier`` before running.
+        """
+        payload = {"tool_name": tool_name, "context": self._session_context()}
+        response = await self._http.post(
+            f"{self._endpoint}/api/scan/authorize",
             json=payload,
             headers=get_scan_headers(self._api_key),
         )

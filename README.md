@@ -117,6 +117,93 @@ response = model.generate_content("Hello!")
 print(response.text)
 ```
 
+### Framework starters
+
+Shrike governs an agent from inside its tool loop: every tool call is judged
+before it executes, the person's prompt is scanned on the way in and never
+blocked, and the agent gets one tool, `request_scope`, to ask for more than
+it holds. One framework-free core, `shrike_guard.govern`, carries that
+behaviour; each starter is a thin translation of one framework's hooks.
+
+| Framework | Module | Install | What it wires |
+|---|---|---|---|
+| Claude Agent SDK | `shrike_guard.claude_agent` | `shrike-guard[claude-agent]` | `PreToolUse` and `UserPromptSubmit` hooks, an in-process MCP tool |
+| OpenAI Agents SDK | `shrike_guard.openai_agents` | `shrike-guard[openai-agents]` | a tool input guardrail on every function tool, a non-tripping input guardrail, a function tool |
+| Google ADK | `shrike_guard.google_adk` | `shrike-guard[google-adk]` | `before_tool_callback` and `before_model_callback`, a `FunctionTool` |
+| LangChain `create_agent` / LangGraph | `shrike_guard.langgraph_agent` | `shrike-guard[langgraph]` | an agent middleware (`wrap_tool_call`, `before_agent`) or wrapped tools for a `ToolNode` |
+| CrewAI | `shrike_guard.crewai_agent` | `shrike-guard[crewai]` | wrapped tools, plus a global `before_tool_call` hook and a `before_llm_call` hook |
+
+Every starter has the same shape. Build it, map your tools to Shrike's
+surfaces, hand it to the framework:
+
+```python
+from shrike_guard import ScanClient
+from shrike_guard.openai_agents import govern   # or claude_agent, google_adk, langgraph_agent, crewai_agent
+
+guard = ScanClient(api_key="shrike-...", agent_id="invoice-agent", session_id=run_id)
+gov = govern(guard, agent_id="invoice-agent")
+gov.declare(["file_path", "file_content", "sql"], purpose="Reconcile Q3 vendor invoices")
+
+gov.map_tool("run_query", "sql", arg="query")
+gov.map_tool("save_report", "file", path_arg="path", content_arg="text")
+gov.exempt("get_time")
+
+agent = gov.govern_agent(Agent(name="invoices", tools=[run_query, save_report, get_time]))
+```
+
+A tool mapping says which surface a tool is and which argument carries the
+payload: `command` (with an optional `cwd_arg`), `file` (a path and the
+content written to it), `file_path`, `sql`, `web_search`, `rag_context`,
+`a2a_message`, `agent_card`, or `none` for a tool allowed without a scan.
+The Claude Agent SDK starter ships mappings for the SDK's built-in tools;
+the others govern the tools you write, so they need your mappings.
+
+A tool with no mapping is refused, with a message that says how to map it,
+until you map it or choose what an unmapped tool gets. `on_unmapped="authorize"` asks the
+backend whether the agent may call it at all: the arguments stay put, and the
+tool's NAME goes up, where the operator's declared scope answers. A tool
+outside the allowlist is refused by name even though nothing read what it was
+carrying, and an expired or exhausted scope holds it. That permit is narrower
+than a mapped tool's and the record says so, with the decision's surface
+recorded as `authorization`. `"allow"` records the call and moves on without
+asking; `"scan"` sends the arguments to be read as text.
+
+What the model sees is the same everywhere: an allowed call runs; a warned
+call runs with the advisory; a blocked call does not run and the model gets
+the reason; a held call (an action outside the declared scope) does not run
+and the model gets the reason, the recovery, and the instruction to ask with
+`request_scope` and then stop. An action Shrike could not check is refused
+(`fail_mode="closed"`). Every decision lands on `gov.decisions` and on your
+`on_decision` callback, with the axis that objected.
+
+Where a framework can route a hold to a person, `on_hold="ask"` does that
+(the Claude Agent SDK's `can_use_tool`). Where it cannot, a hold is answered
+like a refusal and the model is told an operator can grant it on the Shrike
+Agents screen.
+
+The Claude Agent SDK starter in full:
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from shrike_guard import ScanClient
+from shrike_guard.claude_agent import govern
+
+guard = ScanClient(api_key="shrike-...", agent_id="invoice-agent", session_id=run_id)
+gov = govern(guard, agent_id="invoice-agent")
+gov.declare(["file_path", "file_content"], purpose="Reconcile Q3 vendor invoices")
+
+options = ClaudeAgentOptions(
+    hooks=gov.hooks,
+    mcp_servers={"shrike": gov.mcp_server},
+    allowed_tools=["Read", "Write", "Bash", *gov.tool_names],
+    strict_mcp_config=True,
+)
+```
+
+`Bash` goes to `scan_command`; `Write`, `Edit`, `MultiEdit` and `NotebookEdit`
+go to `scan_file` for the path and for the content; `Read` to `scan_file`;
+`WebSearch` and `WebFetch` to `scan_web_search`.
+
 ### Async Usage
 
 ```python

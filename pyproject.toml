@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "shrike-guard"
-version = "4.1.0"
+version = "4.2.0"
 description = "Shrike SDK for AI agent action governance — drop-in wrapper for OpenAI, Anthropic, and Gemini that governs every tool call, prompt, and response server-side. Allow / approve / block. Free tier available."
 authors = ["Shrike Security <security@shrikesecurity.com>"]
 readme = "README.md"
@@ -43,13 +43,35 @@ google-genai = {version = ">=1.0.0,<3.0.0", optional = true}
 # Floor >=50.0.0 clears: GHSA-537c-gmf6-5ccf (<48.0.1 vulnerable OpenSSL wheel)
 # and PYSEC-2026-3552 (49.0.0, fixed in 50.0.0).
 cryptography = {version = ">=50.0.0", optional = true}
+# Claude Agent SDK adapter (shrike_guard.claude_agent). The adapter touches
+# only hooks, HookMatcher, the tool decorator and create_sdk_mcp_server.
+claude-agent-sdk = {version = ">=0.2.0,<1.0.0", optional = true}
+# Framework starters (4.2.0). Each extra installs one framework; `frameworks`
+# installs them all. The adapters import lazily, so the base install is unchanged.
+openai-agents = {version = ">=0.2.0,<1.0.0", optional = true}
+google-adk = {version = ">=1.0.0,<3.0.0", optional = true}
+langchain = {version = ">=1.0.0,<2.0.0", optional = true}
+langgraph = {version = ">=1.0.0,<2.0.0", optional = true}
+# >=1.15: the starter wires crewai.hooks (before_llm_call, before_tool_call) and
+# crewai.hooks.dispatch.HookAborted, which 1.6.x does not carry. The floor was
+# 1.0.0 until 2026-09-17, so the lock resolved 1.6.1 and every conformance row
+# failed the moment the suite ran against the locked environment instead of a
+# per-framework scratch venv.
+crewai = {version = ">=1.15.0,<2.0.0", optional = true, python = ">=3.10,<3.14"}
 
 [tool.poetry.extras]
 anthropic = ["anthropic"]
 gemini = ["google-genai", "cryptography"]
-all = ["anthropic", "google-genai", "cryptography"]
+claude-agent = ["claude-agent-sdk"]
+openai-agents = ["openai-agents"]
+google-adk = ["google-adk"]
+langgraph = ["langchain", "langgraph"]
+crewai = ["crewai"]
+frameworks = ["claude-agent-sdk", "openai-agents", "google-adk", "langchain", "langgraph", "crewai"]
+all = ["anthropic", "google-genai", "cryptography", "claude-agent-sdk", "openai-agents", "google-adk", "langchain", "langgraph", "crewai"]
 
 [tool.poetry.group.dev.dependencies]
+claude-agent-sdk = ">=0.2.0,<1.0.0"
 pytest = "^8.0.0"
 pytest-asyncio = "^0.23.0"
 pytest-mock = "^3.12.0"
