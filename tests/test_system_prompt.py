@@ -57,6 +57,17 @@ def test_system_prompt_teaches_rotation_recommendation_contract():
     assert "per event" in result
 
 
+def test_system_prompt_forbids_minting_an_id_on_a_lock():
+    """A locked session is the one case where rotation is the WRONG
+    move: a fresh id hides the history the lock was placed on instead
+    of clearing it. The block used to teach only the recommendation
+    half, which on a lock read as instructions for getting past it."""
+    result = system_prompt()
+    assert "locked" in result
+    assert "must not" in result and "mint" in result
+    assert "operator" in result
+
+
 def test_system_prompt_teaches_no_verbatim_retry():
     """The single most-common failure mode after a block is the model
     retrying the same action; the block must instruct otherwise."""

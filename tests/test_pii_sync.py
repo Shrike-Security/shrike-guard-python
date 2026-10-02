@@ -162,7 +162,7 @@ class TestSyncFailurePreservesFallback:
         assert pii_redactor.get_pii_pattern_count() == fallback_count
 
     def test_all_unparseable_regex_keeps_bootstrap(self):
-        """Post-2026-07-02 contract: unknown threat_types no longer silently
+        """Current contract: unknown threat_types are never silently
         drop — they derive a fallback prefix (see the backend-owned prefix
         class below). So "everything → keep fallback" only fires when the
         backend gives us nothing PARSEABLE.
@@ -258,7 +258,7 @@ class TestEndpointConstruction:
 
 
 class TestBackendOwnedPrefixContract:
-    """Regression guard: the SDK's _PREFIX_MAP allowlist once silently
+    """The SDK's _PREFIX_MAP allowlist must never silently
     dropped any backend PII pattern whose threat_type wasn't in the
     hardcoded list. A newly-added ``pii_ip_address`` recognizer never
     redacted client-side even though the backend detected it. Same bug
@@ -294,7 +294,7 @@ class TestBackendOwnedPrefixContract:
         assert any(r.token.startswith("[IP_") and not r.token.startswith("[IP_ADDRESS") for r in result.redactions)
 
     def test_falls_back_when_backend_omits_prefix(self):
-        """Older backends (pre-2026-07-02) don't ship the prefix field. The
+        """A backend that predates the field doesn't ship it. The
         client must NOT drop the pattern — derives IP_ADDRESS from the
         threat_type instead. Different tag than a modern backend's `IP`
         but redaction still fires. Point: no silent drop.

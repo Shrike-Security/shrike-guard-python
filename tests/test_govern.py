@@ -68,6 +68,12 @@ class FakeGuard:
     def scan_a2a_message(self, message: str) -> Dict[str, Any]:
         return self._answer("a2a_message", message)
 
+    def report_outcome(self, scan_id: str, outcome: str, *, exit_status: Optional[int] = None, source: Optional[str] = None) -> None:
+        """What the adapters reported became of each action."""
+        if not hasattr(self, "outcomes"):
+            self.outcomes: List[Dict[str, Any]] = []
+        self.outcomes.append({"scan_id": scan_id, "outcome": outcome, "exit_status": exit_status, "source": source})
+
     def scan_agent_card(self, card: str, verify_signature: bool = False) -> Dict[str, Any]:
         return self._answer("agent_card", card)
 

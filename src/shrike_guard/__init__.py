@@ -63,6 +63,7 @@ from .rotation import (
     ROTATION_THRESHOLD,
     CallerOwnedRotationRecommendation,
     ModuleOwnedRotation,
+    SessionLockedNotice,
     SessionRotation,
     evaluate_rotation,
 )
@@ -147,11 +148,13 @@ __all__ = [
     "CircuitState",
     "retry_with_backoff",
     "async_retry_with_backoff",
-    # Session rotation (two-shape record — mirrors TypeScript SDK + MCP client)
+    # Session rotation (three-shape record — mirrors TypeScript SDK + MCP
+    # client). A locked session emits SessionLockedNotice and never rotates.
     "evaluate_rotation",
     "ROTATION_THRESHOLD",
     "ModuleOwnedRotation",
     "CallerOwnedRotationRecommendation",
+    "SessionLockedNotice",
     "SessionRotation",
     # Exceptions
     "ShrikeError",

@@ -238,9 +238,9 @@ def _require_crewai() -> None:
 
     ``importorskip("crewai")`` is too weak a guard here. It asks whether the
     framework imports, while the starter needs ``crewai.hooks``, which arrived
-    later. On 2026-09-17 the lock resolved crewai 1.6.1: the import succeeded,
-    the guard waved the tests through, and six rows failed on a package the
-    error message called "not installed".
+    later. A lock can resolve a crewai whose import succeeds while
+    ``crewai.hooks`` is absent: the weaker guard waves the tests through and
+    they fail on a package the error message calls "not installed".
 
     Skipping on the narrower import would only move the blindness. A pinned
     crewai that cannot drive the starter is a CONSTRAINT bug and has to be

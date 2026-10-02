@@ -115,6 +115,9 @@ class Decision:
     verdict: Dict[str, Any] = field(default_factory=dict)
     #: The hook, event or tool that produced this decision.
     event: str = "tool"
+    #: The backend's record of the scan, when it kept one; what
+    #: :meth:`Governance.report_outcome` names.
+    scan_id: str = ""
 
     @property
     def denied(self) -> bool:
@@ -289,6 +292,7 @@ def read_verdict(tool_name: str, surface: str, target: str, v: Dict[str, Any], e
         axis=axis,
         verdict=v,
         event=event,
+        scan_id=str(v.get("scan_id") or ""),
     )
 
 
@@ -398,6 +402,27 @@ class Governance:
         if self.on_decision:
             self.on_decision(decision)
         return decision
+
+    def report_outcome(self, out: Outcome, outcome: str, *, exit_status: Optional[int] = None) -> None:
+        """Report what became of a governed action once it ran or failed.
+
+        One report per decision the backend kept a record of (``executed``,
+        ``failed`` or ``skipped``). Never raises; an unreported action reads
+        as unconfirmed, which is what it was. Identifiers and a status only.
+        """
+        report = getattr(self.guard, "report_outcome", None)
+        if report is None:
+            return
+        for d in out.decisions:
+            if not d.scan_id:
+                continue
+            try:
+                report(d.scan_id, outcome, exit_status=exit_status, source=d.event)
+            except Exception:  # noqa: BLE001 - a report that did not arrive leaves the action unconfirmed
+                continue
+
+    async def report_outcome_async(self, out: Outcome, outcome: str, *, exit_status: Optional[int] = None) -> None:
+        await asyncio.to_thread(self.report_outcome, out, outcome, exit_status=exit_status)
 
     # -- the scans one call needs -------------------------------------------
 

@@ -1,4 +1,4 @@
-"""Tests for shrike_guard.rotation — two-shape session rotation record.
+"""Tests for shrike_guard.rotation — three-shape session rotation record.
 
 Mirrors platform/sdks/typescript/tests/unit/rotation.test.ts. Keep the
 two suites aligned when either module changes — parity across the
@@ -85,7 +85,11 @@ def test_module_owned_rotated_true_on_risk_over_threshold():
     assert result["configured_threshold"] == ROTATION_THRESHOLD
 
 
-def test_module_owned_reason_is_session_locked_on_locked_verdict():
+def test_session_locked_does_not_rotate_and_offers_no_new_id():
+    """The lock is the control. Rotating past it sidesteps the control
+    rather than clearing it, which is what the backend's own recovery
+    instruction tells the agent not to do. A lock lifts by a self-release
+    under a live declared scope, or by an operator."""
     result = evaluate_rotation(
         threat_type="session_locked",
         effective_session_id=MODULE_SESSION,
@@ -93,11 +97,30 @@ def test_module_owned_reason_is_session_locked_on_locked_verdict():
     )
     assert result is not None
     assert result["reason"] == "session_locked"
-    assert result["rotated"] is True
+    assert result["rotated"] is False
+    assert result["rotation_recommended"] is False
     assert result["owner"] == "sdk_client"
+    assert result["current_session_id"] == MODULE_SESSION
+    assert "new_session_id" not in result
+    assert "suggested_new_session_id" not in result
 
 
-def test_module_owned_session_locked_without_risk_omits_score():
+def test_session_locked_not_rotated_even_above_threshold():
+    """The ordering is the whole fix: a locked session is ALREADY above the
+    score threshold, so checking the score first would rotate it."""
+    result = evaluate_rotation(
+        threat_type="session_locked",
+        session_risk_score=0.95,
+        effective_session_id=MODULE_SESSION,
+        module_session_id=MODULE_SESSION,
+    )
+    assert result is not None
+    assert result["rotated"] is False
+    assert result["rotation_recommended"] is False
+    assert result["triggering_risk_score"] == 0.95
+
+
+def test_session_locked_without_risk_omits_score():
     """The triggering_risk_score field is optional. session_locked with no
     numeric risk in the payload should omit it, not fabricate a 0.0."""
     result = evaluate_rotation(
@@ -148,7 +171,9 @@ def test_caller_owned_does_not_mutate_module_session_id():
     assert original == MODULE_SESSION
 
 
-def test_caller_owned_reason_is_session_locked_on_locked_verdict():
+def test_caller_owned_session_locked_suggests_nothing():
+    """A caller who owns the session still must not be told that minting a
+    new id is the way past a lock."""
     result = evaluate_rotation(
         threat_type="session_locked",
         effective_session_id=CALLER_SESSION,
@@ -157,6 +182,9 @@ def test_caller_owned_reason_is_session_locked_on_locked_verdict():
     assert result is not None
     assert result["reason"] == "session_locked"
     assert result["owner"] == "caller"
+    assert result["rotation_recommended"] is False
+    assert result["current_session_id"] == CALLER_SESSION
+    assert "suggested_new_session_id" not in result
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,37 @@
 # Changelog
 
+## [4.3.0] - 2026-10-01
+
+### Added
+- **The adapters report what became of a governed action.** A scan proves
+  an action was authorized, never that it ran. The LangGraph middleware and
+  governed tools now report `executed` when the tool returns and `failed`
+  when it raises, and the Claude Agent SDK adapter registers `PostToolUse`
+  and `PostToolUseFailure` and pairs the outcome with the call by
+  `tool_use_id`. The report names the scan by the `scan_id` the verdict
+  carries and carries a status only, never the tool's result or error text.
+  A refusal never runs the handler and reports nothing. An unreported action
+  reads as unconfirmed on the Shrike Agents screen, which is what it is.
+- `ScanClient.report_outcome(scan_id, outcome, exit_status=, source=)` and
+  `ScanClient.report_host_outcome(host, outcome, tool=, call_id=,
+  content_hash=, reason=, scan_id=)`, with async twins, for integrations
+  that hold the outcome themselves. Both are best effort and never raise.
+  `Governance.report_outcome(out, outcome)` reports once per recorded
+  decision. `Decision.scan_id` is a new field and `scan_id` survives
+  sanitization.
+- `SessionLockedNotice` is exported as the third member of the
+  `ClientSessionRotation` union, so a locked session has a type of its own
+  instead of a rotation record with its rotation fields left unset.
+
+### Fixed
+- **A locked session is no longer offered a new session id.** A lock means the
+  session is finished, so the record returned on a `session_locked` verdict now
+  carries no id to adopt. The two rotating records narrow `reason` to
+  `Literal["risk_threshold_exceeded"]`, the only value either can still carry,
+  so a lock and a rotation are distinguishable by type rather than by reading a
+  string. Recovery from a lock is self-release under a live declared scope, or
+  an operator.
+
 ## [4.2.0] - 2026-09-17
 
 ### Added
@@ -215,11 +247,11 @@ Cross-language SDK parity. The TypeScript SDK ships `evaluateRotation` + `Shrike
 
 ### Added
 - **Client-side PII redaction.** `redact_pii()`, `rehydrate_pii()`, `get_redaction_summary()`, `update_pii_patterns()`, and `get_pii_pattern_count()` exported from `shrike_guard`. Detects and tokenizes 20+ PII types (SSN, credit card, email, phone, address, medical record, wallet, etc.) BEFORE the prompt leaves customer environment — Shrike backend never sees the raw PII.
-- **`sync_pii_patterns(endpoint, api_key=None)`** — one-shot startup call fetches the canonical Presidio-derived pattern set from the Shrike backend so client-side detection stays uniform with the server-side scan. Uses httpx (already a hard SDK dep) to inherit certifi's bundled root certs and route around the Python.org macOS installer's empty cert store. Fails safe: on any error (network / timeout / malformed / non-200) the bootstrap patterns stay in place; sync never blocks scans.
+- **`sync_pii_patterns(endpoint, api_key=None)`** — one-shot startup call fetches the canonical pattern set from the Shrike backend so client-side detection stays uniform with the server-side scan. Uses httpx (already a hard SDK dep) to inherit certifi's bundled root certs and route around the Python.org macOS installer's empty cert store. Fails safe: on any error (network / timeout / malformed / non-200) the bootstrap patterns stay in place; sync never blocks scans.
 - **Backend-owned prefix contract.** The recognizer ships its client-side redaction tag (e.g. `[IP_1]`) as part of the pattern payload; the client uses it verbatim. When the backend omits the field (pre-2026-07-02 releases), the SDK derives the prefix from the threat_type. No pattern is ever silently dropped for an unmapped prefix. Adding a new backend pattern requires zero SDK changes.
 
 ### Why
-Client-side redaction removes PII before it crosses the network to Shrike's backend — defense-in-depth for HIPAA / PCI / GLBA / CMMC workloads on top of the BAA/DPA that already covers transmission. The `sync_pii_patterns` step keeps client patterns in step with backend patterns without shipping SDK updates every time Presidio adds a recognizer.
+Client-side redaction removes PII before it crosses the network to Shrike's backend — defense-in-depth for HIPAA / PCI / GLBA / CMMC workloads on top of the BAA/DPA that already covers transmission. The `sync_pii_patterns` step keeps client patterns in step with backend patterns without shipping SDK updates every time the backend adds a recognizer.
 
 ## [2.0.0] - 2026-06-28
 

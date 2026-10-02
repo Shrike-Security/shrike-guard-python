@@ -1,9 +1,8 @@
 """F-2 conformance: every fail-open ALLOW verdict must carry ``degraded=True``.
 
-Regression guard for the client-audit finding where 5 of 7 wrapper surfaces
-allowed silently under ``fail_mode='open'`` — the caller could not distinguish
-"scanned and clean" from "not scanned, enforcement skipped." All fail-open
-returns now route through ``shrike_guard._results.fail_open_result``; these
+Under ``fail_mode='open'`` a caller must be able to tell "scanned and clean"
+apart from "not scanned, enforcement skipped". Every fail-open return routes
+through ``shrike_guard._results.fail_open_result``; these
 tests lock the ``degraded`` marker in per surface so a new wrapper cannot
 regress it.
 """

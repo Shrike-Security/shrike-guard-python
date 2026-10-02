@@ -263,6 +263,9 @@ _PRESERVED_GOVERNANCE_FIELDS = (
     # tuple. Telling a user "your request was blocked" when the agent poisoned
     # its own context is both wrong and unhelpful.
     "content_origin",
+    # The persisted record of this scan, which report_outcome names. An
+    # identifier, not attribution.
+    "scan_id",
     "approval_info",
     "client_session_rotation",
 )

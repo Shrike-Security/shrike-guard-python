@@ -555,6 +555,63 @@ class ScanClient:
         response.raise_for_status()
         return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
 
+    def report_outcome(
+        self,
+        scan_id: str,
+        outcome: str,
+        *,
+        exit_status: Optional[int] = None,
+        source: Optional[str] = None,
+    ) -> None:
+        """Report what became of a scanned action: ``executed``, ``failed`` or ``skipped``.
+
+        Names the scan by the ``scan_id`` the verdict carried. Identifiers and
+        a status only, never output or error text. Never raises: an
+        unreported action reads as unconfirmed, which is what it is.
+        """
+        if not scan_id:
+            return
+        body: Dict[str, Any] = {"scan_id": scan_id, "outcome": outcome, "source": source or SDK_NAME}
+        if exit_status is not None:
+            body["exit_status"] = int(exit_status)
+        self._post_report("/api/scan/outcome", body)
+
+    def report_host_outcome(
+        self,
+        host: str,
+        outcome: str,
+        *,
+        tool: Optional[str] = None,
+        call_id: Optional[str] = None,
+        content_hash: Optional[str] = None,
+        reason: Optional[str] = None,
+        scan_id: Optional[str] = None,
+    ) -> None:
+        """Report the host's own decision about an action, under the host's name.
+
+        ``outcome`` is ``denied`` (a framework guardrail refused the call) or
+        ``failed`` (the host ran it and it failed). Recorded beside Shrike's
+        decisions, never as one of them. ``content_hash`` is a hex digest of
+        the tool input, never the input.
+        """
+        if not host:
+            return
+        body: Dict[str, Any] = {"host": host, "outcome": outcome}
+        if self._session_id:
+            body["session_id"] = self._session_id
+        if self._agent_id:
+            body["agent_id"] = self._agent_id
+        for key, value in (("tool", tool), ("call_id", call_id), ("content_hash", content_hash), ("reason", reason), ("scan_id", scan_id)):
+            if value:
+                body[key] = value
+        self._post_report("/api/scan/host-outcome", body)
+
+    def _post_report(self, path: str, body: Dict[str, Any]) -> None:
+        try:
+            self._http.post(f"{self._endpoint}{path}", json=body, headers=get_scan_headers(self._api_key))
+        except Exception:  # noqa: BLE001 - the record is best effort; the verdict already stood
+            logger.debug("[shrike-guard] report to %s did not arrive", path)
+
     def declare_scope(
         self,
         agent_id: str,
@@ -986,6 +1043,52 @@ class AsyncScanClient:
         _check_rate_limited(response)
         response.raise_for_status()
         return maybe_add_signup_hint(sanitize_scan_response(response.json()), self._api_key)
+
+    async def report_outcome(
+        self,
+        scan_id: str,
+        outcome: str,
+        *,
+        exit_status: Optional[int] = None,
+        source: Optional[str] = None,
+    ) -> None:
+        """Async twin of :meth:`ScanClient.report_outcome`."""
+        if not scan_id:
+            return
+        body: Dict[str, Any] = {"scan_id": scan_id, "outcome": outcome, "source": source or SDK_NAME}
+        if exit_status is not None:
+            body["exit_status"] = int(exit_status)
+        await self._post_report("/api/scan/outcome", body)
+
+    async def report_host_outcome(
+        self,
+        host: str,
+        outcome: str,
+        *,
+        tool: Optional[str] = None,
+        call_id: Optional[str] = None,
+        content_hash: Optional[str] = None,
+        reason: Optional[str] = None,
+        scan_id: Optional[str] = None,
+    ) -> None:
+        """Async twin of :meth:`ScanClient.report_host_outcome`."""
+        if not host:
+            return
+        body: Dict[str, Any] = {"host": host, "outcome": outcome}
+        if self._session_id:
+            body["session_id"] = self._session_id
+        if self._agent_id:
+            body["agent_id"] = self._agent_id
+        for key, value in (("tool", tool), ("call_id", call_id), ("content_hash", content_hash), ("reason", reason), ("scan_id", scan_id)):
+            if value:
+                body[key] = value
+        await self._post_report("/api/scan/host-outcome", body)
+
+    async def _post_report(self, path: str, body: Dict[str, Any]) -> None:
+        try:
+            await self._http.post(f"{self._endpoint}{path}", json=body, headers=get_scan_headers(self._api_key))
+        except Exception:  # noqa: BLE001 - the record is best effort; the verdict already stood
+            logger.debug("[shrike-guard] report to %s did not arrive", path)
 
     async def declare_scope(
         self,

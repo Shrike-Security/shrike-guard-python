@@ -1,6 +1,6 @@
 """Canonical 'Working with Shrike' system-prompt block.
 
-Exposes the ~180-word block that teaches an agent how to react to
+Exposes the block that teaches an agent how to react to
 Shrike verdicts (the four refuse_tier states, the injected-message
 prefix contract emitted by ``format_block_feedback``, the per-event
 rotation-recommendation contract). This module is the source of truth
@@ -23,7 +23,7 @@ internal-copilot) will layer additions on top and expose as attribute
 accessors on the same namespace — e.g. ``system_prompt.support()`` —
 without changing this base signature.
 
-Version: v1.0 (2026-07-06). See the version-history section below.
+Version: v1.0. See the version-history section below.
 """
 
 from __future__ import annotations
@@ -46,9 +46,11 @@ Patterns triggered, those are correlator signals across your recent
 turns; treat them as evidence your current strategy is being read as
 adversarial.
 
-If Shrike returns a rotation recommendation (rotation_recommended:
-true), adopt the suggested_new_session_id on your very next tool call.
-Do not cache suggested ids across turns; they are minted per event.
+If Shrike recommends rotation (rotation_recommended: true), adopt the
+suggested_new_session_id on your next call; ids are per event, never
+cached. If the session is locked, none is offered and you must not
+mint one: a new id hides history rather than clearing the lock. Ask
+the operator to release it and say so.
 
 Shrike is a collaborator, not an obstacle. When it flags something,
 the fastest recovery is to explain your intent and pick a different
@@ -76,10 +78,10 @@ def system_prompt() -> str:
         )
 
     Returns:
-        The block string (~180 words, no trailing newline).
+        The block string, with no trailing newline.
 
     Version:
-        v1.0 (2026-07-06). Access via ``shrike_guard.SYSTEM_PROMPT_VERSION``.
+        v1.0. Access via ``shrike_guard.SYSTEM_PROMPT_VERSION``.
     """
     return _BLOCK_V1_0
 

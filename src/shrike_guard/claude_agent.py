@@ -212,6 +212,9 @@ class Governance(_CoreGovernance):
         self.tool_names: List[str] = [REQUEST_SCOPE_TOOL]
         self._hooks: Optional[Dict[str, Any]] = None
         self._mcp_server: Any = None
+        #: Outcomes of calls that may still run, by tool_use_id, until the
+        #: SDK says what became of them (PostToolUse, PostToolUseFailure).
+        self._pending: Dict[str, Any] = {}
 
     # -- the request_scope MCP tool -----------------------------------------
 
@@ -233,12 +236,28 @@ class Governance(_CoreGovernance):
         tool_name = str(input_data.get("tool_name") or "")
         tool_input = input_data.get("tool_input") or {}
         out = await self.evaluate_async(tool_name, tool_input, event="PreToolUse")
-        if out.held:
-            return _pre_tool_output("ask" if self.on_hold == "ask" else "deny", out.message)
         if out.denied:
             return _pre_tool_output("deny", out.message)
+        # Allowed, warned, or held for a person's answer: the call may still
+        # run, and the SDK says so later under the same tool_use_id.
+        if tool_use_id:
+            self._pending[tool_use_id] = out
+            if len(self._pending) > 512:
+                self._pending.pop(next(iter(self._pending)))
+        if out.held:
+            return _pre_tool_output("ask" if self.on_hold == "ask" else "deny", out.message)
         if out.advisories:
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": " ".join(out.advisories)}}
+        return {}
+
+    async def post_tool_use(self, input_data: Dict[str, Any], tool_use_id: Optional[str] = None, context: Any = None) -> Dict[str, Any]:
+        """The outcome hook: reports executed (PostToolUse) or failed
+        (PostToolUseFailure) for the call the act-plane hook gated. Never
+        blocks and never reads the tool's result."""
+        out = self._pending.pop(tool_use_id, None) if tool_use_id else None
+        if out is not None:
+            event = str(input_data.get("hook_event_name") or "PostToolUse")
+            await self.report_outcome_async(out, "failed" if event == "PostToolUseFailure" else "executed")
         return {}
 
     async def user_prompt_submit(self, input_data: Dict[str, Any], tool_use_id: Optional[str] = None, context: Any = None) -> Dict[str, Any]:
@@ -263,9 +282,18 @@ class Governance(_CoreGovernance):
         """
         _require_sdk()
         if tool_names is None:
-            matchers = {"PreToolUse": [HookMatcher(hooks=[self.pre_tool_use])]}
+            matchers = {
+                "PreToolUse": [HookMatcher(hooks=[self.pre_tool_use])],
+                "PostToolUse": [HookMatcher(hooks=[self.post_tool_use])],
+                "PostToolUseFailure": [HookMatcher(hooks=[self.post_tool_use])],
+            }
         else:
-            matchers = {"PreToolUse": [HookMatcher(matcher="|".join(tool_names), hooks=[self.pre_tool_use])]}
+            pattern = "|".join(tool_names)
+            matchers = {
+                "PreToolUse": [HookMatcher(matcher=pattern, hooks=[self.pre_tool_use])],
+                "PostToolUse": [HookMatcher(matcher=pattern, hooks=[self.post_tool_use])],
+                "PostToolUseFailure": [HookMatcher(matcher=pattern, hooks=[self.post_tool_use])],
+            }
         if self.observe:
             matchers["UserPromptSubmit"] = [HookMatcher(hooks=[self.user_prompt_submit])]
         return matchers

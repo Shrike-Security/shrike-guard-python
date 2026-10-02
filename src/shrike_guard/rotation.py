@@ -1,4 +1,4 @@
-"""Session rotation contract, ported from the MCP client's two-shape record.
+"""Session rotation contract, ported from the MCP client's three-shape record.
 
 Mirrors :mod:`shrike-guard/rotation` (TypeScript) exactly. When a scan
 response indicates the session should rotate — either the backend
@@ -6,8 +6,12 @@ returned an explicit ``session_locked`` verdict or the ``session_state``
 carries an accumulated risk score above the configured threshold —
 integrators need a stable record they can act on.
 
-Two shapes, one discriminated union:
+Three shapes, one discriminated union:
 
+- ``SessionLockedNotice`` — the backend returned ``session_locked``.
+  Nothing rotates: a fresh ``session_id`` sidesteps the lock instead of
+  clearing it. Carries no new id on either ownership. A lock lifts by a
+  self-release under a live declared scope, or by an operator.
 - ``ModuleOwnedRotation`` — the SDK's fallback ``SESSION_ID`` was in
   force for this scan (the developer did not thread their own
   ``session_id`` through the scan call). The SDK caller should adopt
@@ -19,7 +23,9 @@ Two shapes, one discriminated union:
   caller decides whether to adopt ``suggested_new_session_id``, mint
   their own, or ignore.
 
-Discriminate on ``rotated``.
+Discriminate on ``rotated``, then on ``rotation_recommended``. The two
+rotation shapes are reached only by the risk-score trigger, which stays
+in force strictly BELOW a lock as proactive hygiene.
 
 The rotation module is deliberately decoupled from ``ScanClient``:
 ``evaluate_rotation`` is a pure function that takes a structural input
@@ -48,7 +54,8 @@ class ModuleOwnedRotation(TypedDict, total=False):
 
     rotated: Literal[True]
     owner: Literal["sdk_client"]
-    reason: Literal["session_locked", "risk_threshold_exceeded"]
+    #: A locked session never rotates, so the score is the only trigger here.
+    reason: Literal["risk_threshold_exceeded"]
     previous_session_id: str
     new_session_id: str
     triggering_risk_score: float
@@ -73,15 +80,40 @@ class CallerOwnedRotationRecommendation(TypedDict, total=False):
     rotated: Literal[False]
     rotation_recommended: Literal[True]
     owner: Literal["caller"]
-    reason: Literal["session_locked", "risk_threshold_exceeded"]
+    #: A locked session never rotates, so the score is the only trigger here.
+    reason: Literal["risk_threshold_exceeded"]
     current_session_id: str
     suggested_new_session_id: str
     triggering_risk_score: float
     configured_threshold: float
 
 
-#: Discriminated union of the two rotation record shapes.
-SessionRotation = Union[ModuleOwnedRotation, CallerOwnedRotationRecommendation]
+class SessionLockedNotice(TypedDict, total=False):
+    """Emitted when the backend locked the session.
+
+    Nothing rotated and nothing should: a fresh ``session_id`` sidesteps
+    the lock instead of clearing it. No ``suggested_new_session_id`` on
+    this shape, deliberately. A lock lifts by a self-release under a live
+    declared scope, or by an operator.
+
+    Discriminant: ``rotated: False`` + ``rotation_recommended: False``.
+    """
+
+    rotated: Literal[False]
+    rotation_recommended: Literal[False]
+    owner: Literal["sdk_client", "caller"]
+    reason: Literal["session_locked"]
+    current_session_id: str
+    triggering_risk_score: float
+    configured_threshold: float
+
+
+#: Discriminated union of the three rotation record shapes.
+SessionRotation = Union[
+    ModuleOwnedRotation,
+    CallerOwnedRotationRecommendation,
+    SessionLockedNotice,
+]
 
 
 def evaluate_rotation(
@@ -94,12 +126,15 @@ def evaluate_rotation(
     """Inspect a scan verdict and return a :data:`SessionRotation` record
     when rotation is warranted, or ``None`` when no trigger fired.
 
-    Triggers:
+    Outcomes:
 
-    - ``threat_type == "session_locked"`` — the backend has explicitly
-      told the SDK the session is done.
-    - ``session_risk_score >= ROTATION_THRESHOLD`` — the L9 correlator
-      has accumulated risk past the safe-continuation floor.
+    - ``threat_type == "session_locked"`` — returns a
+      :class:`SessionLockedNotice`. NOTHING rotates: the lock is the
+      control and a fresh id sidesteps it. Checked first, because a
+      locked session is already above the score threshold.
+    - ``session_risk_score >= ROTATION_THRESHOLD`` (and not locked) —
+      the L9 correlator has accumulated risk past the safe-continuation
+      floor, so rotation is warranted as proactive hygiene.
 
     Ownership detection compares ``effective_session_id`` (the id
     actually used for this scan) against ``module_session_id`` (the SDK's
@@ -128,15 +163,31 @@ def evaluate_rotation(
         isinstance(session_risk_score, (int, float))
         and float(session_risk_score) >= ROTATION_THRESHOLD
     )
+    caller_owned = effective_session_id != module_session_id
 
-    if not locked and not over_threshold:
+    # A locked session is never rotated and never recommended for
+    # rotation. Checked BEFORE the score branch, because a locked session
+    # is already above the threshold and would otherwise fall through.
+    if locked:
+        notice: SessionLockedNotice = {
+            "rotated": False,
+            "rotation_recommended": False,
+            "owner": "caller" if caller_owned else "sdk_client",
+            "reason": "session_locked",
+            "current_session_id": effective_session_id,
+            "configured_threshold": ROTATION_THRESHOLD,
+        }
+        if isinstance(session_risk_score, (int, float)):
+            notice["triggering_risk_score"] = float(session_risk_score)
+        return notice
+
+    if not over_threshold:
         return None
 
-    reason: Literal["session_locked", "risk_threshold_exceeded"] = (
-        "session_locked" if locked else "risk_threshold_exceeded"
-    )
+    # The lock branch returned already, so this is the only reachable value.
+    reason: Literal["risk_threshold_exceeded"] = "risk_threshold_exceeded"
 
-    if effective_session_id != module_session_id:
+    if caller_owned:
         rec: CallerOwnedRotationRecommendation = {
             "rotated": False,
             "rotation_recommended": True,

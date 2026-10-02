@@ -367,16 +367,30 @@ def test_govern_names_the_extra_when_the_sdk_is_missing(monkeypatch: pytest.Monk
 def test_wiring_with_the_sdk_installed() -> None:
     pytest.importorskip("claude_agent_sdk")
     gov = ca.govern(FakeGuard(), agent_id="a")
-    assert set(gov.hooks) == {"PreToolUse", "UserPromptSubmit"}
+    assert set(gov.hooks) == {
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "UserPromptSubmit",
+    }
     matcher = gov.hooks["PreToolUse"][0]
     # No matcher string: the gate sees every tool the agent can call, not only
     # the ones this SDK knows how to read. A narrower matcher is available by
     # naming tools explicitly, and costs visibility of everything left out.
     assert matcher.matcher is None
     assert matcher.hooks == [gov.pre_tool_use]
+    # Both outcome events share one handler; it reads hook_event_name to tell
+    # executed from failed.
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        assert gov.hooks[event][0].hooks == [gov.post_tool_use]
+        assert gov.hooks[event][0].matcher is None
     named = ca.govern(FakeGuard(), agent_id="a").hooks_for(["Bash", "Write"])
     assert named["PreToolUse"][0].matcher == "Bash|Write"
+    # Narrowing has to narrow all three, or an outcome arrives for a call the
+    # gate never saw.
+    assert named["PostToolUse"][0].matcher == "Bash|Write"
+    assert named["PostToolUseFailure"][0].matcher == "Bash|Write"
     assert gov.tool_names == [ca.REQUEST_SCOPE_TOOL]
     assert gov.mcp_server is gov.mcp_server  # built once
     quiet = ca.govern(FakeGuard(), agent_id="a", observe=False)
-    assert set(quiet.hooks) == {"PreToolUse"}
+    assert set(quiet.hooks) == {"PreToolUse", "PostToolUse", "PostToolUseFailure"}

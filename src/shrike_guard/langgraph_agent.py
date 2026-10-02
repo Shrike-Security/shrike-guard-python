@@ -122,13 +122,26 @@ if LANGCHAIN_AVAILABLE:
             out = self.governance.evaluate(self.name, kwargs, event="governed_tool")
             if out.held or out.denied:
                 return out.message
-            return self.inner.invoke(kwargs)
+            # The inner tool's return is the outcome in hand: report it, never read it.
+            try:
+                result = self.inner.invoke(kwargs)
+            except Exception:
+                self.governance.report_outcome(out, "failed")
+                raise
+            self.governance.report_outcome(out, "executed")
+            return result
 
         async def _arun(self, *args: Any, **kwargs: Any) -> Any:
             out = await self.governance.evaluate_async(self.name, kwargs, event="governed_tool")
             if out.held or out.denied:
                 return out.message
-            return await self.inner.ainvoke(kwargs)
+            try:
+                result = await self.inner.ainvoke(kwargs)
+            except Exception:
+                await self.governance.report_outcome_async(out, "failed")
+                raise
+            await self.governance.report_outcome_async(out, "executed")
+            return result
 
 else:  # pragma: no cover
 
@@ -153,14 +166,27 @@ class Governance(_CoreGovernance):
         out = self.evaluate(str(call.get("name") or ""), call.get("args") or {}, event="wrap_tool_call")
         if out.held or out.denied:
             return refusal_message(out, str(call.get("id") or ""), str(call.get("name") or ""))
-        return handler(request)
+        # The handler's return is the outcome in hand: report it, never read it.
+        try:
+            result = handler(request)
+        except Exception:
+            self.report_outcome(out, "failed")
+            raise
+        self.report_outcome(out, "executed")
+        return result
 
     async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         call = request.tool_call
         out = await self.evaluate_async(str(call.get("name") or ""), call.get("args") or {}, event="wrap_tool_call")
         if out.held or out.denied:
             return refusal_message(out, str(call.get("id") or ""), str(call.get("name") or ""))
-        return await handler(request)
+        try:
+            result = await handler(request)
+        except Exception:
+            await self.report_outcome_async(out, "failed")
+            raise
+        await self.report_outcome_async(out, "executed")
+        return result
 
     def govern_tools(self, tools: List[Any]) -> List[Any]:
         """Wrap each tool so Shrike judges its calls. Returns the wrapped tools."""

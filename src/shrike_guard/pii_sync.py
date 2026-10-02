@@ -1,6 +1,6 @@
 """PII Pattern Sync — fetches canonical PII patterns from the Shrike backend
 at startup and updates the client-side redactor so detection coverage matches
-the backend's Presidio-derived set.
+the backend's canonical set.
 
 On any failure (network, timeout, malformed response, unrecognized threat
 type) the function logs a warning and keeps the hardcoded bootstrap patterns.
