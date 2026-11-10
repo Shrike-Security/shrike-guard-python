@@ -25,8 +25,8 @@ for, in order, and stops at the first refusal. The result is an
 :class:`Outcome`: ``allow``, ``warn`` (allowed, with an advisory for the
 model), ``hold`` (an operator must grant it), or ``deny`` (blocked, or not
 checkable while failing closed). The message on a hold or a deny is written
-for the model: the reason, the recovery, and the instruction to stop and
-report rather than retry or work around.
+for the model: the reason, the recovery, and what to do next, which is to
+change the action rather than repeat it.
 
 **Observe.** :meth:`Governance.observe_prompt` scans the person's prompt on
 the way in and never blocks it. A finding becomes a note for the model.
@@ -135,10 +135,21 @@ class Decision:
                 "It was not run. Do not retry; report to the operator."
             )
         if self.tier == "block":
-            return (
-                f"Shrike blocked this {self.surface}: {self.reason} "
-                "Do not retry it or work around it. Report to the operator."
-            ).replace(":  ", ": ")
+            # A refusal is a correction, not a wall: the backend's recovery text
+            # says what to do next when it has one (a lock, an operator's stop);
+            # otherwise the agent is told to change the action, since the same
+            # one will be refused again.
+            head = f"Shrike blocked this {self.surface}"
+            text = f"{head}: {self.reason}" if self.reason else f"{head}."
+            if self.recovery:
+                text += f" {self.recovery}"
+            else:
+                text += (
+                    " The same action will be refused again, so change it rather "
+                    "than repeating it. If no change fits the task, stop and report "
+                    "to the operator."
+                )
+            return text
         text = f"Shrike held this {self.surface}: {self.reason}".rstrip()
         if self.recovery:
             text += f" {self.recovery}"
@@ -274,7 +285,7 @@ def read_verdict(tool_name: str, surface: str, target: str, v: Dict[str, Any], e
         or ""
     )
     axis = str(intent.get("objected_on") or "")
-    recovery_text = str(recovery.get("message") or recovery.get("suggested_action") or "")
+    recovery_text = str(recovery.get("message") or recovery.get("suggested_action") or recovery.get("instruction") or "")
     if intent:
         recovery_text = (
             f"Declared purpose: {intent.get('declared_purpose') or '-'}. "
@@ -339,6 +350,10 @@ class Governance:
         self.scope: Dict[str, Any] = {}
         self._capabilities: Dict[Tuple[str, str], bool] = {}
         self.tools: Dict[str, ToolMapping] = {}
+        # The starter's own scope tool asks the backend, which decides every
+        # request it makes. Judged here it would be refused as unmapped, and
+        # the model could never ask for more than it holds.
+        self.exempt(REQUEST_SCOPE_NAME)
         for name, spec in (tools or {}).items():
             self.map_tool(name, spec if isinstance(spec, ToolMapping) else ToolMapping(spec))
 

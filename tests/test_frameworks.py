@@ -58,6 +58,15 @@ def check_scope(module: Any) -> None:
     assert not res.ok and res.message.startswith("Refused (widening)")
 
 
+def check_scope_tool_passes(module: Any, drive: Driver, name: str = "request_scope") -> None:
+    """The starter's own request_scope reaches the backend through its own
+    hook: a guard that blocks everything is never asked about it."""
+    gov = build(module, BLOCK, None)
+    result, message = drive(gov, name, {"tools": ["command"], "reason": "x"})
+    assert result == "allowed", message
+    assert gov.guard.calls == []
+
+
 # --- Claude Agent SDK --------------------------------------------------------
 
 def _claude_drive(gov: Any, name: str, args: Dict[str, Any]) -> Tuple[str, str]:
@@ -85,6 +94,7 @@ def test_claude_agent_unmapped_and_scope() -> None:
     result, message = _claude_drive(gov, "send_mail", {"to": "x"})
     assert result == "refused" and "map_tool('send_mail'" in message
     check_scope(claude_agent)
+    check_scope_tool_passes(claude_agent, _claude_drive, claude_agent.REQUEST_SCOPE_TOOL)
 
 
 # --- OpenAI Agents SDK -------------------------------------------------------
@@ -113,6 +123,7 @@ def test_openai_agents_unmapped_scope_and_wiring() -> None:
 
     check_unmapped(openai_agents, _openai_drive)
     check_scope(openai_agents)
+    check_scope_tool_passes(openai_agents, _openai_drive)
 
     @function_tool
     def run_query(query: str) -> str:
@@ -153,6 +164,7 @@ def test_google_adk_unmapped_scope_and_wiring() -> None:
 
     check_unmapped(google_adk, _adk_drive)
     check_scope(google_adk)
+    check_scope_tool_passes(google_adk, _adk_drive)
 
     def run_query(query: str) -> str:
         """Run a query."""
@@ -203,6 +215,7 @@ def test_langgraph_unmapped_scope_wrapped_tools_and_middleware() -> None:
 
     check_unmapped(langgraph_agent, _langgraph_drive)
     check_scope(langgraph_agent)
+    check_scope_tool_passes(langgraph_agent, _langgraph_drive)
 
     @tool
     def run_query(query: str) -> str:
@@ -277,6 +290,7 @@ def test_crewai_unmapped_scope_and_wrapped_tools() -> None:
 
     check_unmapped(crewai_agent, _crewai_drive)
     check_scope(crewai_agent)
+    check_scope_tool_passes(crewai_agent, _crewai_drive)
 
     class QueryInput(BaseModel):
         query: str

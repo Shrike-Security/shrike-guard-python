@@ -27,7 +27,7 @@ the SDK's permission decision: ``allow`` lets the tool run; ``warn`` lets it
 run with the advisory attached as context; ``block`` denies it; a hold
 (``require_approval``) denies it by default, or asks (see ``on_hold``). A
 denied action hands the model the reason and the recovery, so the agent can
-stop and ask instead of retrying or working around it.
+change the action, or stop and ask, instead of repeating it.
 
 The hook matches the built-in tools it has mappings for. Tools from your own
 MCP servers are not matched unless you map them (``gov.map_tool``) and widen
@@ -209,6 +209,8 @@ class Governance(_CoreGovernance):
             tools=merged,
             on_unmapped=on_unmapped,
         )
+        # The hook sees the scope tool under its MCP name.
+        self.exempt(REQUEST_SCOPE_TOOL)
         self.tool_names: List[str] = [REQUEST_SCOPE_TOOL]
         self._hooks: Optional[Dict[str, Any]] = None
         self._mcp_server: Any = None

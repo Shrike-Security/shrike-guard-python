@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import pytest
 
-from shrike_guard.govern import Decision, Governance, Outcome, ToolMapping, read_verdict, serialize_arguments
+from shrike_guard.govern import REQUEST_SCOPE_NAME, Decision, Governance, Outcome, ToolMapping, read_verdict, serialize_arguments
 
 ALLOW = {"safe": True, "refuse_tier": "allow", "violations": []}
 WARN = {"safe": True, "refuse_tier": "warn", "violations": [{"threat_type": "suspicious_path", "user_message": "unusual path"}]}
@@ -155,6 +155,18 @@ def test_warn_carries_an_advisory() -> None:
     assert out.advisories == ["Shrike advisory on this command: unusual path"]
 
 
+def test_block_carries_the_recovery_or_says_to_change_the_action() -> None:
+    # A refusal with no recovery text tells the agent to change the action,
+    # never to give up on the task; one with the backend's instruction (a lock,
+    # an operator's stop) hands that instruction over verbatim.
+    bare = gov_with(BLOCK).map_tool("run", "command", arg="cmd").evaluate("run", {"cmd": "ls"})
+    assert "change it rather than repeating it" in bare.message
+    assert "Do not retry" not in bare.message
+    stopped = dict(BLOCK, recovery={"instruction": "An operator stopped this agent. Wait."})
+    out = gov_with(stopped).map_tool("run", "command", arg="cmd").evaluate("run", {"cmd": "ls"})
+    assert out.message == "Shrike blocked this command: exfil pattern An operator stopped this agent. Wait."
+
+
 def test_hold_names_the_axis_and_the_recovery() -> None:
     out = gov_with(HOLD).map_tool("run", "command", arg="cmd").evaluate("run", {"cmd": "ls"})
     d = out.decisions[-1]
@@ -185,6 +197,13 @@ def test_exempt_tool_is_allowed_and_recorded() -> None:
     guard = FakeGuard(BLOCK)
     out = Governance(guard, agent_id="a").exempt("clock").evaluate("clock", {})
     assert out.allowed and guard.calls == [] and out.decisions[-1].reason == "exempt by mapping"
+
+
+def test_the_scope_tool_is_never_refused_by_its_own_gate() -> None:
+    # The backend decides a scope request; the gate must let the call reach it.
+    guard = FakeGuard(BLOCK)
+    out = Governance(guard, agent_id="a").evaluate(REQUEST_SCOPE_NAME, {"tools": ["command"]})
+    assert out.allowed and guard.calls == []
 
 
 # --- table 3: unmapped tools -------------------------------------------------
